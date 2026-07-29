@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/NoxiouSi/eino-risk-qa/internal/domain/riskfactor"
+	"github.com/NoxiouSi/eino-risk-qa/internal/logging"
 )
 
 // ErrOptimisticLockConflict 乐观锁冲突：并发更新导致 version 不匹配。
@@ -41,12 +42,14 @@ var _ riskfactor.SessionRepository = (*GORMSessionRepository)(nil)
 //     否则 RowsAffected=0，判定为冲突；
 //   - 只插入 History 中 round >= 数据库已有的最大 round+1 的记录，避免重复插入。
 func (r *GORMSessionRepository) Save(ctx context.Context, session *riskfactor.RiskFactorSession) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	log := logging.FromContext(ctx).With("session_id", session.ID)
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing RiskFactorSessionModel
 		err := tx.Where("session_id = ?", session.ID).Take(&existing).Error
 
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
+			log.Debug("save session: inserting new record")
 			model := toModel(session, 0)
 			if err := tx.Create(model).Error; err != nil {
 				return err
@@ -84,6 +87,7 @@ func (r *GORMSessionRepository) Save(ctx context.Context, session *riskfactor.Ri
 		// 而不是本次事务内刚查到的 existing.Version——否则永远能匹配上，检测不到并发冲突。
 		expectedVersion := session.Version()
 		model := toModel(session, expectedVersion+1)
+		log.Debug("save session: updating existing record", "expected_version", expectedVersion, "status", model.Status)
 		result := tx.Model(&RiskFactorSessionModel{}).
 			Where("session_id = ? AND version = ?", session.ID, expectedVersion).
 			Updates(map[string]interface{}{
@@ -113,15 +117,24 @@ func (r *GORMSessionRepository) Save(ctx context.Context, session *riskfactor.Ri
 		}
 		return nil
 	})
+	if err != nil {
+		log.Error("save session: failed", "error", err.Error())
+		return err
+	}
+	log.Info("save session: succeeded", "status", string(session.Status), "current_round", session.CurrentRound)
+	return nil
 }
 
 // FindByID 按业务 session_id 加载聚合，还原完整历史；不存在时返回 ErrSessionNotFound。
 func (r *GORMSessionRepository) FindByID(ctx context.Context, sessionID string) (*riskfactor.RiskFactorSession, error) {
+	log := logging.FromContext(ctx).With("session_id", sessionID)
 	var sm RiskFactorSessionModel
 	if err := r.db.WithContext(ctx).Where("session_id = ?", sessionID).Take(&sm).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Warn("find session by id: not found")
 			return nil, ErrSessionNotFound
 		}
+		log.Error("find session by id: query failed", "error", err.Error())
 		return nil, err
 	}
 
@@ -130,6 +143,7 @@ func (r *GORMSessionRepository) FindByID(ctx context.Context, sessionID string) 
 		Where("session_id = ?", sessionID).
 		Order("round ASC").
 		Find(&qas).Error; err != nil {
+		log.Error("find session by id: query qa_records failed", "error", err.Error())
 		return nil, err
 	}
 
@@ -139,13 +153,16 @@ func (r *GORMSessionRepository) FindByID(ctx context.Context, sessionID string) 
 // FindByBatchID 按业务 batch_id 列出该批次下的全部会话（含各自完整历史），
 // 用于批次查询接口；不存在任何会话时返回空切片、不返回错误（由调用方结合 batches 表判断 batch 是否存在）。
 func (r *GORMSessionRepository) FindByBatchID(ctx context.Context, batchID string) ([]*riskfactor.RiskFactorSession, error) {
+	log := logging.FromContext(ctx).With("batch_id", batchID)
 	var sms []RiskFactorSessionModel
 	if err := r.db.WithContext(ctx).
 		Where("batch_id = ?", batchID).
 		Order("id ASC").
 		Find(&sms).Error; err != nil {
+		log.Error("find sessions by batch_id: query failed", "error", err.Error())
 		return nil, err
 	}
+	log.Debug("find sessions by batch_id: query result", "session_count", len(sms))
 	if len(sms) == 0 {
 		return []*riskfactor.RiskFactorSession{}, nil
 	}
@@ -160,6 +177,7 @@ func (r *GORMSessionRepository) FindByBatchID(ctx context.Context, batchID strin
 		Where("session_id IN ?", sessionIDs).
 		Order("round ASC").
 		Find(&qas).Error; err != nil {
+		log.Error("find sessions by batch_id: query qa_records failed", "error", err.Error())
 		return nil, err
 	}
 	qasBySession := make(map[string][]QARecordModel, len(sms))

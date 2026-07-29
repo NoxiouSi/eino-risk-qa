@@ -7,6 +7,8 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/deepseek"
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
+
+	"github.com/NoxiouSi/eino-risk-qa/internal/logging"
 )
 
 // Provider LLM 厂商标识，对应配置项 llm.provider。
@@ -50,22 +52,34 @@ type DeepSeekConfig struct {
 // NewToolCallingChatModel 按配置的 provider 分发到具体实现，统一返回
 // eino 的 model.ToolCallingChatModel 接口供上层使用；切换/新增厂商仅需在此新增一个 case 分支。
 func NewToolCallingChatModel(ctx context.Context, cfg FactoryConfig) (model.ToolCallingChatModel, error) {
+	logging.L.Info("llm factory: constructing chat model", "provider", string(cfg.Provider))
 	switch cfg.Provider {
 	case ProviderMock, "":
 		return NewMockChatModel(), nil
 	case ProviderOpenAI:
-		return openai.NewChatModel(ctx, &openai.ChatModelConfig{
+		cm, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 			APIKey:  cfg.OpenAI.APIKey,
 			BaseURL: cfg.OpenAI.BaseURL,
 			Model:   cfg.OpenAI.Model,
 		})
+		if err != nil {
+			logging.L.Error("llm factory: construct openai chat model failed", "error", err.Error())
+			return nil, err
+		}
+		return cm, nil
 	case ProviderDeepSeek:
-		return deepseek.NewChatModel(ctx, &deepseek.ChatModelConfig{
+		cm, err := deepseek.NewChatModel(ctx, &deepseek.ChatModelConfig{
 			APIKey:  cfg.DeepSeek.APIKey,
 			BaseURL: cfg.DeepSeek.BaseURL,
 			Model:   cfg.DeepSeek.Model,
 		})
+		if err != nil {
+			logging.L.Error("llm factory: construct deepseek chat model failed", "model", cfg.DeepSeek.Model, "error", err.Error())
+			return nil, err
+		}
+		return cm, nil
 	default:
+		logging.L.Error("llm factory: unknown provider", "provider", string(cfg.Provider))
 		return nil, ErrUnknownProvider
 	}
 }

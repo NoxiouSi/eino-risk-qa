@@ -6,7 +6,7 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
+	"os"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"gorm.io/driver/mysql"
@@ -19,6 +19,7 @@ import (
 	"github.com/NoxiouSi/eino-risk-qa/internal/infra/idgen"
 	"github.com/NoxiouSi/eino-risk-qa/internal/infra/llm"
 	"github.com/NoxiouSi/eino-risk-qa/internal/infra/persistence"
+	"github.com/NoxiouSi/eino-risk-qa/internal/logging"
 )
 
 func main() {
@@ -27,13 +28,20 @@ func main() {
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Fatalf("load config failed: %v", err)
+		// 此时日志系统尚未按配置初始化（连配置都没加载成功），直接用默认 Logger 记录后退出。
+		logging.L.Error("load config failed", "error", err.Error())
+		os.Exit(1)
 	}
+
+	logging.Setup(cfg.Log.Level)
+	logging.L.Info("config loaded", "config_path", *configPath, "log_level", cfg.Log.Level, "llm_provider", cfg.LLM.Provider)
 
 	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{})
 	if err != nil {
-		log.Fatalf("connect mysql failed: %v", err)
+		logging.L.Error("connect mysql failed", "host", cfg.MySQL.Host, "port", cfg.MySQL.Port, "database", cfg.MySQL.Database, "error", err.Error())
+		os.Exit(1)
 	}
+	logging.L.Info("mysql connected", "host", cfg.MySQL.Host, "port", cfg.MySQL.Port, "database", cfg.MySQL.Database)
 
 	chatModel, err := llm.NewToolCallingChatModel(context.Background(), llm.FactoryConfig{
 		Provider: llm.Provider(cfg.LLM.Provider),
@@ -49,7 +57,8 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Fatalf("construct chat model failed: %v", err)
+		logging.L.Error("construct chat model failed", "provider", cfg.LLM.Provider, "error", err.Error())
+		os.Exit(1)
 	}
 
 	judger := llm.NewJudgerAdapter(chatModel)
@@ -66,6 +75,6 @@ func main() {
 	h := server.New(server.WithHostPorts(cfg.Server.Addr))
 	api.RegisterRoutes(h, cfg.Auth.APIKey, batchHandler, sessionHandler)
 
-	log.Printf("eino-risk-qa server listening on %s (llm.provider=%s)", cfg.Server.Addr, cfg.LLM.Provider)
+	logging.L.Info("eino-risk-qa server listening", "addr", cfg.Server.Addr, "llm_provider", cfg.LLM.Provider)
 	h.Spin()
 }

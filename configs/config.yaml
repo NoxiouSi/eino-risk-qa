@@ -9,7 +9,7 @@ mysql:
   database: "eino_risk_qa"
 
 llm:
-  provider: "mock" # mock | openai | deepseek
+  provider: "deepseek" # mock | openai | deepseek
   openai:
     api_key: ""
     base_url: ""
@@ -21,3 +21,6 @@ llm:
 
 auth:
   api_key: "" # 留空表示不启用鉴权，本地调试建议留空；生产环境务必设置
+
+log:
+  level: "info" # debug | info | warn | error

@@ -18,6 +18,7 @@ func TestLoad_NoConfigFile_UsesDefaults(t *testing.T) {
 	assert.Equal(t, ":8080", cfg.Server.Addr)
 	assert.Equal(t, "mock", cfg.LLM.Provider)
 	assert.Equal(t, "eino_risk_qa", cfg.MySQL.Database)
+	assert.Equal(t, "info", cfg.Log.Level)
 }
 
 func TestLoad_FromYAMLFile_OverridesDefaults(t *testing.T) {
@@ -43,6 +44,8 @@ llm:
     model: "deepseek-reasoner"
 auth:
   api_key: "my-secret-key"
+log:
+  level: "debug"
 `
 	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o600))
 
@@ -57,9 +60,14 @@ auth:
 	assert.Equal(t, "deepseek-reasoner", cfg.LLM.DeepSeek.Model)
 	assert.Equal(t, "https://api.deepseek.com/beta", cfg.LLM.DeepSeek.BaseURL)
 	assert.Equal(t, "my-secret-key", cfg.Auth.APIKey)
+	assert.Equal(t, "debug", cfg.Log.Level)
 }
 
 func TestLoad_NoConfigFile_DeepSeekModelDefaultsToDeepSeekChat(t *testing.T) {
+	// 显式清空该环境变量，避免本机/CI环境中已设置的真实DeepSeek Key污染断言
+	// （该Key本身是通过环境变量注入的，属于预期行为，但不应让本测试依赖外部环境状态）。
+	t.Setenv("EINO_RISK_QA_LLM_DEEPSEEK_API_KEY", "")
+
 	cfg, err := config.Load("")
 
 	require.NoError(t, err)

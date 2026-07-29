@@ -11,6 +11,7 @@ import (
 
 	"github.com/NoxiouSi/eino-risk-qa/internal/api/dto"
 	"github.com/NoxiouSi/eino-risk-qa/internal/application"
+	"github.com/NoxiouSi/eino-risk-qa/internal/logging"
 )
 
 // BatchHandler 处理 /api/v1/batches 相关的两个接口：批量首轮提交、批次查询。
@@ -25,24 +26,31 @@ func NewBatchHandler(batchSvc *application.BatchAppService) *BatchHandler {
 
 // SubmitBatch 处理 POST /api/v1/batches。
 func (h *BatchHandler) SubmitBatch(ctx context.Context, c *app.RequestContext) {
+	log := logging.FromContext(ctx)
+
 	var req dto.BatchRequest
 	if err := c.BindAndValidate(&req); err != nil {
+		log.Warn("submit batch: invalid request body", "error", err.Error())
 		writeError(c, http.StatusBadRequest, CodeInvalidParam, "invalid request body")
 		return
 	}
 	if err := validateBatchRequest(req); err != nil {
+		log.Warn("submit batch: validation failed", "user_id", req.User.UserID, "error", err.Error())
 		writeError(c, http.StatusBadRequest, CodeInvalidParam, err.Error())
 		return
 	}
 
 	input := toSubmitBatchInput(req)
+	log.Info("submit batch: accepted", "user_id", req.User.UserID, "risk_factor_count", len(req.RiskFactors), "stream", req.Stream)
 
 	if !req.Stream {
 		result, err := h.batchSvc.SubmitBatch(ctx, input)
 		if err != nil {
+			log.Error("submit batch: application service failed", "user_id", req.User.UserID, "error", err.Error())
 			writeError(c, http.StatusInternalServerError, CodeInternalError, err.Error())
 			return
 		}
+		log.Info("submit batch: succeeded", "batch_id", result.BatchID, "session_count", len(result.Results))
 		c.JSON(consts.StatusOK, toBatchResponse(result))
 		return
 	}
@@ -55,23 +63,31 @@ func (h *BatchHandler) SubmitBatch(ctx context.Context, c *app.RequestContext) {
 
 	go func() {
 		defer pw.Close()
+		log.Info("submit batch (stream): started", "user_id", req.User.UserID, "risk_factor_count", len(req.RiskFactors))
 		h.batchSvc.SubmitBatchStream(ctx, input, newSSEForwarder(pw))
+		log.Info("submit batch (stream): finished", "user_id", req.User.UserID)
 	}()
 }
 
 // GetBatch 处理 GET /api/v1/batches/{batch_id}。
 func (h *BatchHandler) GetBatch(ctx context.Context, c *app.RequestContext) {
+	log := logging.FromContext(ctx)
 	batchID := c.Param("batch_id")
+	log.Info("get batch: received", "batch_id", batchID)
+
 	result, err := h.batchSvc.GetBatch(ctx, batchID)
 	if err != nil {
 		if errors.Is(err, application.ErrBatchNotFound) {
+			log.Warn("get batch: not found", "batch_id", batchID)
 			writeError(c, http.StatusNotFound, CodeBatchNotFound, "batch not found")
 			return
 		}
+		log.Error("get batch: application service failed", "batch_id", batchID, "error", err.Error())
 		writeError(c, http.StatusInternalServerError, CodeInternalError, err.Error())
 		return
 	}
 
+	log.Info("get batch: succeeded", "batch_id", batchID, "session_count", len(result.Results))
 	resp := dto.BatchResponse{BatchID: result.BatchID, CreatedAt: result.CreatedAt.Format(rfc3339)}
 	for _, r := range result.Results {
 		resp.Sessions = append(resp.Sessions, toSessionDetailDTO(r))

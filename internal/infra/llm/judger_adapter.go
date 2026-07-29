@@ -10,6 +10,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/NoxiouSi/eino-risk-qa/internal/domain/riskfactor"
+	"github.com/NoxiouSi/eino-risk-qa/internal/logging"
 )
 
 // ErrNoToolCall 模型未按预期返回工具调用。
@@ -37,26 +38,33 @@ var _ riskfactor.RiskJudger = (*JudgerAdapter)(nil)
 
 // Judge 同步判断：绑定工具、调用 Generate、解析工具调用参数为 JudgementResult；解析失败时重试。
 func (a *JudgerAdapter) Judge(ctx context.Context, input riskfactor.JudgeInput) (*riskfactor.JudgementResult, error) {
+	log := logging.FromContext(ctx).With("session_id", input.SessionID, "risk_factor_type", string(input.RiskFactorType))
 	toolModel, err := a.chatModel.WithTools([]*schema.ToolInfo{judgementToolInfo()})
 	if err != nil {
+		log.Error("judge: bind tools failed", "error", err.Error())
 		return nil, err
 	}
 	messages := BuildMessages(input)
 
 	var lastErr error
 	for attempt := 0; attempt <= a.maxRetries; attempt++ {
+		log.Debug("judge: calling chat model", "attempt", attempt)
 		msg, err := toolModel.Generate(ctx, messages)
 		if err != nil {
+			log.Warn("judge: chat model generate failed", "attempt", attempt, "error", err.Error())
 			lastErr = err
 			continue
 		}
 		result, err := parseJudgementFromMessage(msg)
 		if err != nil {
+			log.Warn("judge: parse tool call result failed", "attempt", attempt, "error", err.Error())
 			lastErr = err
 			continue
 		}
+		log.Info("judge: succeeded", "attempt", attempt, "completeness", result.Completeness, "reasonableness", result.Reasonableness)
 		return result, nil
 	}
+	log.Error("judge: max retries exceeded", "max_retries", a.maxRetries, "last_error", lastErr)
 	return nil, fmt.Errorf("%w: %v", ErrMaxRetriesExceeded, lastErr)
 }
 

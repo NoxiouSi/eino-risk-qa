@@ -13,6 +13,7 @@ type Config struct {
 	MySQL  MySQLConfig  `mapstructure:"mysql"`
 	LLM    LLMConfig    `mapstructure:"llm"`
 	Auth   AuthConfig   `mapstructure:"auth"`
+	Log    LogConfig    `mapstructure:"log"`
 }
 
 // ServerConfig HTTP 服务配置。
@@ -62,6 +63,11 @@ type AuthConfig struct {
 	APIKey string `mapstructure:"api_key"`
 }
 
+// LogConfig 日志配置。
+type LogConfig struct {
+	Level string `mapstructure:"level"` // debug | info | warn | error，默认 info
+}
+
 // Load 从指定路径加载配置文件，并支持通过环境变量覆盖（前缀 EINO_RISK_QA，
 // 如 EINO_RISK_QA_MYSQL_PASSWORD 覆盖 mysql.password），未提供路径时使用内置默认值。
 func Load(configPath string) (*Config, error) {
@@ -98,6 +104,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("llm.provider", "mock")
 	v.SetDefault("llm.deepseek.model", "deepseek-chat")
 	v.SetDefault("auth.api_key", "")
+	v.SetDefault("log.level", "info")
 }
 
 // bindAllEnvKeys 显式绑定全部配置项对应的环境变量，规避 AutomaticEnv 在 Unmarshal 场景下的局限。
@@ -108,6 +115,7 @@ func bindAllEnvKeys(v *viper.Viper) {
 		"llm.provider", "llm.openai.api_key", "llm.openai.base_url", "llm.openai.model",
 		"llm.deepseek.api_key", "llm.deepseek.base_url", "llm.deepseek.model",
 		"auth.api_key",
+		"log.level",
 	}
 	for _, k := range keys {
 		_ = v.BindEnv(k)

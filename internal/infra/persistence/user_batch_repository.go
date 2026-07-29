@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/NoxiouSi/eino-risk-qa/internal/application"
+	"github.com/NoxiouSi/eino-risk-qa/internal/logging"
 )
 
 // GORMUserBatchRepository 实现 application.UserBatchRepository：users/batches 表的简单持久化，
@@ -24,29 +25,46 @@ var _ application.UserBatchRepository = (*GORMUserBatchRepository)(nil)
 
 // EnsureUser 若 user_id 不存在则插入；已存在时忽略（幂等，不覆盖已有 name）。
 func (r *GORMUserBatchRepository) EnsureUser(ctx context.Context, u application.User) error {
+	log := logging.FromContext(ctx).With("user_id", u.UserID)
 	var existing UserModel
 	err := r.db.WithContext(ctx).Where("user_id = ?", u.UserID).Take(&existing).Error
 	if err == nil {
+		log.Debug("ensure user: already exists")
 		return nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		log.Error("ensure user: query failed", "error", err.Error())
 		return err
 	}
-	return r.db.WithContext(ctx).Create(&UserModel{UserID: u.UserID, Name: u.Name}).Error
+	if err := r.db.WithContext(ctx).Create(&UserModel{UserID: u.UserID, Name: u.Name}).Error; err != nil {
+		log.Error("ensure user: create failed", "error", err.Error())
+		return err
+	}
+	log.Info("ensure user: created")
+	return nil
 }
 
 // CreateBatch 插入一条批次记录。
 func (r *GORMUserBatchRepository) CreateBatch(ctx context.Context, b application.Batch) error {
-	return r.db.WithContext(ctx).Create(&BatchModel{BatchID: b.BatchID, UserID: b.UserID}).Error
+	log := logging.FromContext(ctx).With("batch_id", b.BatchID, "user_id", b.UserID)
+	if err := r.db.WithContext(ctx).Create(&BatchModel{BatchID: b.BatchID, UserID: b.UserID}).Error; err != nil {
+		log.Error("create batch: failed", "error", err.Error())
+		return err
+	}
+	log.Info("create batch: succeeded")
+	return nil
 }
 
 // FindBatch 按 batch_id 查询；不存在返回 application.ErrBatchNotFound。
 func (r *GORMUserBatchRepository) FindBatch(ctx context.Context, batchID string) (*application.Batch, error) {
+	log := logging.FromContext(ctx).With("batch_id", batchID)
 	var bm BatchModel
 	if err := r.db.WithContext(ctx).Where("batch_id = ?", batchID).Take(&bm).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Warn("find batch: not found")
 			return nil, application.ErrBatchNotFound
 		}
+		log.Error("find batch: query failed", "error", err.Error())
 		return nil, err
 	}
 	return &application.Batch{BatchID: bm.BatchID, UserID: bm.UserID, CreatedAt: bm.CreatedAt}, nil
