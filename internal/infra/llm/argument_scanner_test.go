@@ -59,6 +59,34 @@ func TestArgumentScanner_NoFollowUpQuestion_ProducesNoDelta(t *testing.T) {
 	assert.True(t, scanner.Started())
 }
 
+// TestArgumentScanner_ColonWithSpace_StillMatches 是回归测试：真实 DeepSeek API 输出的
+// 参数 JSON 在冒号后带一个空格（如 `"follow_up_question": "..."`），而非本项目 MockChatModel
+// 使用的紧凑格式（`"follow_up_question":"..."`，无空格）。曾经的 bug——固定字符串标记不容忍
+// 该空格，导致对接真实 DeepSeek 时增量输出完全失效（delta_count 恒为 0），而 mock/单测从未
+// 覆盖这一格式差异。
+func TestArgumentScanner_ColonWithSpace_StillMatches(t *testing.T) {
+	full := `{"completeness": false, "reasonableness": true, "extracted_info": {}, "follow_up_question": "您的任职时间是？", "reasoning_summary": "x"}`
+
+	scanner := llm.NewArgumentScanner()
+	got := feedInChunks(scanner, full, 3)
+
+	assert.Equal(t, "您的任职时间是？", got)
+	assert.True(t, scanner.Started())
+}
+
+// TestArgumentScanner_FollowUpQuestionNotLastField 验证 follow_up_question 并非参数 JSON
+// 最后一个字段时（本项目已不再假设固定字段顺序），扫描器仍能正确提取其增量内容，
+// 且字段闭合后不会被后续字段（如本例中的 reasoning_summary）的内容污染。
+func TestArgumentScanner_FollowUpQuestionNotLastField(t *testing.T) {
+	full := `{"completeness":false,"extracted_info":{},"follow_up_question":"追问内容","reasonableness":true,"reasoning_summary":"审计摘要"}`
+
+	scanner := llm.NewArgumentScanner()
+	got := feedInChunks(scanner, full, 3)
+
+	assert.Equal(t, "追问内容", got)
+	assert.Equal(t, full, scanner.FullArguments())
+}
+
 func TestArgumentScanner_FeedBeforeMarkerAppears_ReturnsEmpty(t *testing.T) {
 	scanner := llm.NewArgumentScanner()
 

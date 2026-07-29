@@ -17,7 +17,7 @@ llm:
   deepseek:
     api_key: "" # 留空，通过环境变量 EINO_RISK_QA_LLM_DEEPSEEK_API_KEY 注入，不写入配置文件
     base_url: "" # 留空则使用默认值 https://api.deepseek.com/
-    model: "deepseek-chat" # deepseek-chat | deepseek-reasoner
+    model: "deepseek-v4-flash" # deepseek-chat | deepseek-reasoner
 
 auth:
   api_key: "" # 留空表示不启用鉴权，本地调试建议留空；生产环境务必设置

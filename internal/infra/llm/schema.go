@@ -13,9 +13,9 @@ const judgementToolName = "submit_risk_judgement"
 //	reasoning_summary string  判断依据摘要（审计用）
 //	follow_up_question string 追问问题
 //
-// 字段顺序约定：follow_up_question 放在参数 JSON 的最后一个字段。多数 Provider（含 OpenAI 兼容协议）
-// 会按 Schema 声明顺序生成参数 JSON 的字段，这样当该字段开始输出时，其余结构化字段已经确定，
-// 简化 infra/llm 增量扫描器的实现（见 stream_adapter.go）。
+// 注意：ParamsOneOf 底层基于 Go map 构建，序列化为 JSON Schema 时字段顺序不受此处代码书写顺序
+// 保证（不同 Provider 的实际输出顺序可能不同，例如按字段名字母序排列）。因此 infra/llm 的增量
+// 扫描器（见 argument_scanner.go）不依赖 follow_up_question 处于参数 JSON 中的固定位置。
 func judgementToolInfo() *schema.ToolInfo {
 	return &schema.ToolInfo{
 		Name: judgementToolName,

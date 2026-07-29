@@ -1,14 +1,19 @@
 package llm
 
 import (
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
 
-// followUpQuestionMarker 是结构化输出参数 JSON 中 follow_up_question 字段的起始标记。
-// 依赖 schema.go 中约定的字段顺序（follow_up_question 为最后一个字段），
-// 使得该标记一旦出现，说明后续字符都是该字段的值，直至遇到闭合引号。
-const followUpQuestionMarker = `"follow_up_question":"`
+// followUpQuestionKeyPattern 匹配结构化输出参数 JSON 中 follow_up_question 字段的
+// "键 + 冒号 + 值起始引号"，直到匹配到值的开始引号为止（分组结束位置即 valueStart）。
+//
+// 不同 Provider/序列化实现输出的 JSON 空白风格并不一致：有的是紧凑格式 `"key":"value"`
+// （如本项目 MockChatModel），有的会在冒号后带一个空格 `"key": "value"`（如 DeepSeek 官方 API
+// 实测输出）。因此这里必须用可容忍任意数量空白字符的正则，而非固定字符串匹配，
+// 否则在冒号后带空格的 Provider 上会导致该标记永远匹配不上、增量输出完全失效。
+var followUpQuestionKeyPattern = regexp.MustCompile(`"follow_up_question"\s*:\s*"`)
 
 // ArgumentScanner 是一个增量 JSON 扫描器：随着工具调用参数字符串（arguments）不断增长的分片被喂入，
 // 一旦识别出 follow_up_question 字段的值已经开始输出，就能持续产出该字段值的"新增部分"，
@@ -21,7 +26,10 @@ const followUpQuestionMarker = `"follow_up_question":"`
 // Feed 的开头再尝试输出，从不向调用方吐出截断的字符。
 //
 // 简化说明（适用于本项目场景，非通用 JSON 流式解析器）：
-//   - 依赖 follow_up_question 是参数 JSON 中最后一个字符串字段这一 Schema 约定；
+//   - 不依赖 follow_up_question 在参数 JSON 中的具体字段顺序——由于 schema.go 中
+//     ParamsOneOf 基于 Go map 构建、序列化时字段顺序不受代码书写顺序保证（实测各 Provider
+//     可能按字段名字母序等规则重排），因此本扫描器通过正则匹配该字段的键名+冒号+起始引号，
+//     无论它出现在参数 JSON 的哪个位置都能正确识别；
 //   - 不处理字段值内出现转义引号（\"）的极端情况——若模型输出中出现转义字符，字符串会在
 //     遇到该转义引号处被误判为提前结束，这是一个已知的简化边界，可在未来演进为完整的
 //     JSON tokenizer（如使用 encoding/json.Decoder 的 Token() 流式接口）。
@@ -49,12 +57,12 @@ func (s *ArgumentScanner) Feed(chunk string) string {
 	}
 	full := s.buffer.String()
 
-	idx := strings.Index(full, followUpQuestionMarker)
-	if idx == -1 {
+	loc := followUpQuestionKeyPattern.FindStringIndex(full)
+	if loc == nil {
 		return ""
 	}
 	s.started = true
-	valueStart := idx + len(followUpQuestionMarker)
+	valueStart := loc[1]
 	rest := full[valueStart:]
 
 	closeIdx := strings.IndexByte(rest, '"')
