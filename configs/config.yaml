@@ -1,0 +1,19 @@
+server:
+  addr: ":8080"
+
+mysql:
+  host: "127.0.0.1"
+  port: 3306
+  user: "eino_risk_qa"
+  password: "EinoRiskQa#2026"
+  database: "eino_risk_qa"
+
+llm:
+  provider: "mock" # mock | openai
+  openai:
+    api_key: ""
+    base_url: ""
+    model: "gpt-4o-mini"
+
+auth:
+  api_key: "" # 留空表示不启用鉴权，本地调试建议留空；生产环境务必设置

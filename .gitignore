@@ -1,1 +1,13 @@
 .codebuddy/
+
+# 前端依赖与构建产物
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Go 构建产物
+/eino-risk-qa-server
+/bin/
+
+# 本地日志/临时文件
+*.log

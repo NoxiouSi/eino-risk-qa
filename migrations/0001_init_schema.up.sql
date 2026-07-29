@@ -33,6 +33,7 @@ CREATE TABLE `risk_factor_sessions` (
   `termination_reason` VARCHAR(32) DEFAULT NULL COMMENT 'unreasonable/max_rounds_incomplete，终态才有值',
   `cleared` TINYINT(1) DEFAULT NULL COMMENT '是否排除合理怀疑，终态才有值',
   `extracted_info` JSON DEFAULT NULL COMMENT '跨轮次累积合并后的结构化提取信息',
+  `follow_up_question` TEXT DEFAULT NULL COMMENT '当前待回答的追问问题文本，Processing状态下有效，用于跨HTTP请求保持UserMessage()推导所需状态',
   `version` INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本号',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

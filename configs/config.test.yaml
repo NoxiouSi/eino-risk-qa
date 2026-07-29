@@ -1,0 +1,19 @@
+server:
+  port: 18080
+
+mysql:
+  host: 127.0.0.1
+  port: 3306
+  user: eino_risk_qa
+  password: "EinoRiskQa#2026"
+  database: eino_risk_qa_test
+  charset: utf8mb4
+  parse_time: true
+  loc: Local
+
+llm:
+  provider: mock
+  max_rounds: 3
+
+auth:
+  api_key: "test-api-key"

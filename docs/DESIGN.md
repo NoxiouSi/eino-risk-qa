@@ -149,10 +149,22 @@ type JudgeStreamEvent struct {
     Err          error            // Type=error时的错误
 }
 
+// JudgeInput 是调用RiskJudger所需的完整上下文（实现阶段修订：原方案用位置参数传递mainQuestion/history/
+// latestAnswer，实现时发现追问轮次下"本轮实际被回答的问题"既不等于MainQuestion也不在History中——History只包含
+// 已完成轮次，因此改为显式的CurrentQuestion字段，避免Prompt构建时上下文缺失）
+type JudgeInput struct {
+    SessionID       string         // 多路复用标识，同步调用可忽略
+    RiskFactorType  RiskFactorType
+    MainQuestion    string
+    History         []QAPair       // 已完成的历史问答（不含本轮）
+    CurrentQuestion string         // 本轮实际被回答的问题：首轮=MainQuestion，追问轮次=上一轮的follow_up_question
+    LatestAnswer    string
+}
+
 type RiskJudger interface {
-    Judge(ctx context.Context, riskFactorType RiskFactorType, mainQuestion string, history []QAPair, latestAnswer string) (*JudgementResult, error)
+    Judge(ctx context.Context, input JudgeInput) (*JudgementResult, error)
     // JudgeStream 流式版本：持续产出message_delta事件（追问问题的真实逐字增量，或终态收尾话术），channel关闭前必发出一条Type=result或Type=error的终止事件
-    JudgeStream(ctx context.Context, sessionID string, riskFactorType RiskFactorType, mainQuestion string, history []QAPair, latestAnswer string) (<-chan JudgeStreamEvent, error)
+    JudgeStream(ctx context.Context, input JudgeInput) (<-chan JudgeStreamEvent, error)
 }
 ```
 
@@ -478,6 +490,7 @@ erDiagram
         varchar termination_reason
         tinyint cleared
         json extracted_info
+        text follow_up_question "当前待回答的追问问题"
         int version "乐观锁"
         datetime created_at
         datetime updated_at
@@ -495,7 +508,7 @@ erDiagram
     }
 ```
 
-说明：`message`字段**不新增持久化列**——非终态时`message`等价于最新一轮`qa_records.question`（即下一轮的追问问题，在生成时已作为下一轮`question`落库）；终态时`message`是领域常量，运行时由`RiskFactorSession.UserMessage()`根据`status`推导，无需存储，避免数据冗余。
+说明：`message`字段本身不直接存储，而是由`RiskFactorSession.UserMessage()`运行时推导：终态时是领域常量，无需存储；非终态时等价于`risk_factor_sessions.follow_up_question`列（**实现阶段修订**：由于`qa_records`表按`(session_id, round)`成对记录"问题+回答"，而追问问题在生成时其对应轮次的回答尚未提交，无法提前写入`qa_records`，因此在`risk_factor_sessions`表新增`follow_up_question`列，专门保存"当前待回答的追问问题文本"，用于跨HTTP请求保持该状态；该轮真正被回答后，会作为完整的`(question, answer)`对写入`qa_records`）。
 
 ### 外键约束设计决策
 
@@ -549,6 +562,7 @@ CREATE TABLE `risk_factor_sessions` (
   `termination_reason` VARCHAR(32) DEFAULT NULL COMMENT 'unreasonable/max_rounds_incomplete，终态才有值',
   `cleared` TINYINT(1) DEFAULT NULL COMMENT '是否排除合理怀疑，终态才有值',
   `extracted_info` JSON DEFAULT NULL COMMENT '跨轮次累积合并后的结构化提取信息',
+  `follow_up_question` TEXT DEFAULT NULL COMMENT '当前待回答的追问问题文本，Processing状态下有效，用于跨HTTP请求保持UserMessage()推导所需状态',
   `version` INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本号',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -707,14 +721,16 @@ type JudgeStreamEvent struct {
 }
 
 type RiskJudger interface {
-    Judge(ctx context.Context, riskFactorType RiskFactorType, mainQuestion string, history []QAPair, latestAnswer string) (*JudgementResult, error)
+    Judge(ctx context.Context, input JudgeInput) (*JudgementResult, error)
     // JudgeStream 流式版本：详见"流式输出设计"章节，channel关闭前必发出Result或Error事件
-    JudgeStream(ctx context.Context, sessionID string, riskFactorType RiskFactorType, mainQuestion string, history []QAPair, latestAnswer string) (<-chan JudgeStreamEvent, error)
+    JudgeStream(ctx context.Context, input JudgeInput) (<-chan JudgeStreamEvent, error)
 }
 
 type SessionRepository interface {
     Save(ctx context.Context, session *RiskFactorSession) error // 事务内同时持久化session状态与新增QA记录
     FindByID(ctx context.Context, sessionID string) (*RiskFactorSession, error)
+    // FindByBatchID 按batch_id列出该批次下的全部会话（实现阶段补充，用于批次查询接口）
+    FindByBatchID(ctx context.Context, batchID string) ([]*RiskFactorSession, error)
 }
 ```
 
@@ -759,4 +775,31 @@ func (s *RiskFactorSession) SubmitFollowUpAnswer(answer string, judgement *Judge
 // UserMessage 对外展示文案推导（核心领域规则，api/application层直接读取其返回值，不重复实现分支逻辑）：
 // Status==Processing时返回最新一轮的follow_up_question；到达任意终态(Cleared/NotCleared)时统一返回领域常量ClosingMessage
 func (s *RiskFactorSession) UserMessage() string
+
+// Version 只读访问乐观锁版本号（实现阶段补充）：由 infra/persistence 层在 FindByID 还原聚合时赋值，
+// Save 时用于检测并发冲突（WHERE version=加载时的版本号），domain 层不修改该值、不作为业务规则的一部分
+func (s *RiskFactorSession) Version() int
 ```
+
+## 本地运行方式（实现阶段补充）
+
+前置条件：本机 MySQL 已按 `docs/MYSQL_SETUP.md` 完成安装与 `eino_risk_qa` 库/账号初始化；Go 1.21+；Node.js 18+。
+
+**启动后端**（默认使用 `mock` LLM provider，无需真实 API Key，即可完整跑通判断逻辑）：
+
+```bash
+go build -o /tmp/eino-risk-qa-server ./cmd/server
+./tmp/eino-risk-qa-server -config configs/config.yaml   # 默认监听 :8080
+```
+
+**启动前端调试页面**：
+
+```bash
+cd web
+npm install       # 首次运行需要
+npm run dev        # 默认监听 :5173，已通过 vite.config.ts 将 /api/* 代理到 127.0.0.1:8080
+```
+
+浏览器打开 `http://localhost:5173/` 即可使用：填写用户ID与至少一个风险要素的主问题/回答，勾选"流式输出"可体验 SSE 逐字追问；对处于"处理中"状态的会话卡片可继续输入追问回答；页面底部"批次查询"支持粘贴 `batch_id` 恢复调试上下文（刷新页面后使用）。
+
+若要切换为真实 LLM（如 OpenAI 兼容协议），修改 `configs/config.yaml` 中 `llm.provider: openai` 并填写 `llm.openai.*` 下的 `api_key`/`base_url`/`model`。
