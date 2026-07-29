@@ -38,6 +38,9 @@ llm:
     api_key: "sk-test"
     base_url: "https://api.example.com/v1"
     model: "gpt-4o-mini"
+  deepseek:
+    base_url: "https://api.deepseek.com/beta"
+    model: "deepseek-reasoner"
 auth:
   api_key: "my-secret-key"
 `
@@ -51,7 +54,26 @@ auth:
 	assert.Equal(t, 3307, cfg.MySQL.Port)
 	assert.Equal(t, "openai", cfg.LLM.Provider)
 	assert.Equal(t, "sk-test", cfg.LLM.OpenAI.APIKey)
+	assert.Equal(t, "deepseek-reasoner", cfg.LLM.DeepSeek.Model)
+	assert.Equal(t, "https://api.deepseek.com/beta", cfg.LLM.DeepSeek.BaseURL)
 	assert.Equal(t, "my-secret-key", cfg.Auth.APIKey)
+}
+
+func TestLoad_NoConfigFile_DeepSeekModelDefaultsToDeepSeekChat(t *testing.T) {
+	cfg, err := config.Load("")
+
+	require.NoError(t, err)
+	assert.Equal(t, "deepseek-chat", cfg.LLM.DeepSeek.Model)
+	assert.Empty(t, cfg.LLM.DeepSeek.APIKey)
+}
+
+func TestLoad_DeepSeekAPIKey_InjectedViaEnvironmentVariable(t *testing.T) {
+	t.Setenv("EINO_RISK_QA_LLM_DEEPSEEK_API_KEY", "sk-from-env")
+
+	cfg, err := config.Load("")
+
+	require.NoError(t, err)
+	assert.Equal(t, "sk-from-env", cfg.LLM.DeepSeek.APIKey)
 }
 
 func TestLoad_EnvironmentVariableOverridesFileAndDefault(t *testing.T) {

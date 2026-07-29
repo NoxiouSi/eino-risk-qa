@@ -27,7 +27,7 @@
 ## 技术栈
 
 - 语言：Go 1.21+
-- LLM框架：CloudWeGo `eino` + `eino-ext`（ChatModel Provider适配，如openai兼容/ark）
+- LLM框架：CloudWeGo `eino` + `eino-ext`（ChatModel Provider可插拔适配，已支持 `mock`（本地/CI固定规则模拟）、`openai`（兼容协议，含自建/代理网关）、`deepseek`（`eino-ext/components/model/deepseek`独立实现，非借用OpenAI兼容通道）三种provider，新增厂商仅需在`factory.go`增加一个分发分支）
 - Web框架：Hertz（CloudWeGo同生态，高性能、原生流式支持，errgroup并发调用友好）
 - ORM：GORM + golang-migrate（正式迁移脚本）
 - 数据库：MySQL 8.x
@@ -668,7 +668,7 @@ eino-risk-qa/
 │   │   └── session_app_service.go           # SessionAppService：SubmitInitial/SubmitFollowUp及其Stream变体，加载聚合→调用RiskJudger端口→调用聚合领域方法→SessionRepository端口持久化，事务边界控制
 │   ├── infra/
 │   │   ├── llm/
-│   │   │   ├── factory.go                   # ChatModel工厂：按config.Provider(openai/ark)分发eino-ext组件，返回ToolCallingChatModel接口
+│   │   │   ├── factory.go                   # ChatModel工厂：按config.Provider(mock/openai/deepseek)分发eino-ext组件，返回ToolCallingChatModel接口
 │   │   │   ├── prompt.go                    # Prompt/ChatTemplate构建：系统提示词、风险要素类型、历史问答拼装、完整性/合理性判断指引；Tool Schema字段顺序约定follow_up_question为最后一个字段
 │   │   │   ├── schema.go                    # 结构化输出Tool Schema定义(completeness/reasonableness/extracted_info/reasoning_summary/follow_up_question)
 │   │   │   ├── judger_adapter.go            # JudgerAdapter实现domain.RiskJudger端口：组合factory+prompt+schema，含重试与解析失败处理
@@ -802,4 +802,11 @@ npm run dev        # 默认监听 :5173，已通过 vite.config.ts 将 /api/* �
 
 浏览器打开 `http://localhost:5173/` 即可使用：填写用户ID与至少一个风险要素的主问题/回答，勾选"流式输出"可体验 SSE 逐字追问；对处于"处理中"状态的会话卡片可继续输入追问回答；页面底部"批次查询"支持粘贴 `batch_id` 恢复调试上下文（刷新页面后使用）。
 
-若要切换为真实 LLM（如 OpenAI 兼容协议），修改 `configs/config.yaml` 中 `llm.provider: openai` 并填写 `llm.openai.*` 下的 `api_key`/`base_url`/`model`。
+若要切换为真实 LLM：
+- OpenAI 兼容协议：修改 `configs/config.yaml` 中 `llm.provider: openai` 并填写 `llm.openai.*` 下的 `api_key`/`base_url`/`model`。
+- DeepSeek 官方 API（实现阶段新增）：修改 `llm.provider: deepseek`，`model` 默认已配置为 `deepseek-chat`（可改为 `deepseek-reasoner`）；**API Key 不写入配置文件**，通过环境变量注入后启动进程即可：
+
+  ```bash
+  export EINO_RISK_QA_LLM_DEEPSEEK_API_KEY="sk-xxxxxxxx"
+  ./eino-risk-qa-server -config configs/config.yaml
+  ```

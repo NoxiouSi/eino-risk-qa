@@ -37,12 +37,21 @@ func (c MySQLConfig) DSN() string {
 
 // LLMConfig LLM Provider 可插拔配置，对应 docs/DESIGN.md 中的 factory.go 分发逻辑。
 type LLMConfig struct {
-	Provider string       `mapstructure:"provider"` // mock | openai
-	OpenAI   OpenAIConfig `mapstructure:"openai"`
+	Provider string         `mapstructure:"provider"` // mock | openai | deepseek
+	OpenAI   OpenAIConfig   `mapstructure:"openai"`
+	DeepSeek DeepSeekConfig `mapstructure:"deepseek"`
 }
 
 // OpenAIConfig OpenAI 兼容协议配置。
 type OpenAIConfig struct {
+	APIKey  string `mapstructure:"api_key"`
+	BaseURL string `mapstructure:"base_url"`
+	Model   string `mapstructure:"model"`
+}
+
+// DeepSeekConfig DeepSeek 官方 API 配置。APIKey 约定通过环境变量
+// EINO_RISK_QA_LLM_DEEPSEEK_API_KEY 注入，配置文件中留空，不落盘、不入库。
+type DeepSeekConfig struct {
 	APIKey  string `mapstructure:"api_key"`
 	BaseURL string `mapstructure:"base_url"`
 	Model   string `mapstructure:"model"`
@@ -87,6 +96,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("mysql.user", "eino_risk_qa")
 	v.SetDefault("mysql.database", "eino_risk_qa")
 	v.SetDefault("llm.provider", "mock")
+	v.SetDefault("llm.deepseek.model", "deepseek-chat")
 	v.SetDefault("auth.api_key", "")
 }
 
@@ -96,6 +106,7 @@ func bindAllEnvKeys(v *viper.Viper) {
 		"server.addr",
 		"mysql.host", "mysql.port", "mysql.user", "mysql.password", "mysql.database",
 		"llm.provider", "llm.openai.api_key", "llm.openai.base_url", "llm.openai.model",
+		"llm.deepseek.api_key", "llm.deepseek.base_url", "llm.deepseek.model",
 		"auth.api_key",
 	}
 	for _, k := range keys {

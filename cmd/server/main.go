@@ -42,6 +42,11 @@ func main() {
 			BaseURL: cfg.LLM.OpenAI.BaseURL,
 			Model:   cfg.LLM.OpenAI.Model,
 		},
+		DeepSeek: llm.DeepSeekConfig{
+			APIKey:  cfg.LLM.DeepSeek.APIKey,
+			BaseURL: cfg.LLM.DeepSeek.BaseURL,
+			Model:   cfg.LLM.DeepSeek.Model,
+		},
 	})
 	if err != nil {
 		log.Fatalf("construct chat model failed: %v", err)
