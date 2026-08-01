@@ -46,3 +46,28 @@ func TestGORMUserBatchRepository_FindBatch_NotFound(t *testing.T) {
 
 	assert.ErrorIs(t, err, application.ErrBatchNotFound)
 }
+
+func TestGORMUserBatchRepository_FindUser_ParsesRiskFactorTypes(t *testing.T) {
+	db := setupTestDB(t)
+	repo := persistence.NewGORMUserBatchRepository(db)
+	ctx := context.Background()
+
+	require.NoError(t, repo.EnsureUser(ctx, application.User{UserID: "u_3", Name: "王五"}))
+	require.NoError(t, db.Table("users").Where("user_id = ?", "u_3").
+		Update("risk_factor_types", "identity, fund_source ,").Error)
+
+	u, err := repo.FindUser(ctx, "u_3")
+
+	require.NoError(t, err)
+	assert.Equal(t, "王五", u.Name)
+	assert.Equal(t, []string{"identity", "fund_source"}, u.RiskFactorTypes, "应去除空白与空项")
+}
+
+func TestGORMUserBatchRepository_FindUser_NotFound(t *testing.T) {
+	db := setupTestDB(t)
+	repo := persistence.NewGORMUserBatchRepository(db)
+
+	_, err := repo.FindUser(context.Background(), "u_missing")
+
+	assert.ErrorIs(t, err, application.ErrUserNotFound)
+}

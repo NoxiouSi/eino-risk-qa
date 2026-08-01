@@ -127,6 +127,16 @@ func (r *fakeUserBatchRepository) FindBatch(ctx context.Context, batchID string)
 	return &b, nil
 }
 
+func (r *fakeUserBatchRepository) FindUser(ctx context.Context, userID string) (*application.User, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	u, ok := r.users[userID]
+	if !ok {
+		return nil, application.ErrUserNotFound
+	}
+	return &u, nil
+}
+
 var _ application.UserBatchRepository = (*fakeUserBatchRepository)(nil)
 
 // sequentialIDGenerator 生成可预测、递增的 ID，便于测试断言。
@@ -155,3 +165,25 @@ func (g *sequentialIDGenerator) NewSessionID() string {
 }
 
 var _ application.IDGenerator = (*sequentialIDGenerator)(nil)
+
+// fakeMainQuestionCatalog 内存实现的 MainQuestionCatalog，按预设的 riskFactorType -> mainQuestion
+// 映射返回结果。
+type fakeMainQuestionCatalog struct {
+	questions map[string]string
+}
+
+func newFakeMainQuestionCatalog() *fakeMainQuestionCatalog {
+	return &fakeMainQuestionCatalog{questions: map[string]string{}}
+}
+
+func (c *fakeMainQuestionCatalog) FindMainQuestions(ctx context.Context, riskFactorTypes []string) (map[string]string, error) {
+	result := make(map[string]string, len(riskFactorTypes))
+	for _, t := range riskFactorTypes {
+		if q, ok := c.questions[t]; ok {
+			result[t] = q
+		}
+	}
+	return result, nil
+}
+
+var _ application.MainQuestionCatalog = (*fakeMainQuestionCatalog)(nil)

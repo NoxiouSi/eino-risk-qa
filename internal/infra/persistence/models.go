@@ -4,14 +4,27 @@ import "time"
 
 // UserModel 对应 users 表。
 type UserModel struct {
-	ID        uint64    `gorm:"column:id;primaryKey;autoIncrement"`
-	UserID    string    `gorm:"column:user_id;uniqueIndex:uk_user_id;size:64;not null"`
-	Name      string    `gorm:"column:name;size:128"`
-	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
+	ID              uint64    `gorm:"column:id;primaryKey;autoIncrement"`
+	UserID          string    `gorm:"column:user_id;uniqueIndex:uk_user_id;size:64;not null"`
+	Name            string    `gorm:"column:name;size:128"`
+	RiskFactorTypes string    `gorm:"column:risk_factor_types;size:255;not null;default:''"`
+	CreatedAt       time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt       time.Time `gorm:"column:updated_at;autoUpdateTime"`
 }
 
 func (UserModel) TableName() string { return "users" }
+
+// RiskFactorMainQuestionModel 对应 risk_factor_main_questions 表：风险要素类型到主问题的
+// 全局固定映射，所有用户共用同一套主问题文案（不按用户区分）。
+type RiskFactorMainQuestionModel struct {
+	ID             uint64    `gorm:"column:id;primaryKey;autoIncrement"`
+	RiskFactorType string    `gorm:"column:risk_factor_type;uniqueIndex:uk_risk_factor_type;size:32;not null"`
+	MainQuestion   string    `gorm:"column:main_question;type:text;not null"`
+	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt      time.Time `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (RiskFactorMainQuestionModel) TableName() string { return "risk_factor_main_questions" }
 
 // BatchModel 对应 batches 表。
 type BatchModel struct {

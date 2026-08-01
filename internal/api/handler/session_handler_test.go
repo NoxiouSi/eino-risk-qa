@@ -21,9 +21,11 @@ import (
 
 func newSessionTestEngine(judger *fakeJudger, sessionRepo *fakeSessionRepository) *server.Hertz {
 	sessionSvc := application.NewSessionAppService(judger, sessionRepo)
-	batchSvc := application.NewBatchAppService(sessionSvc, newFakeUserBatchRepository(), newSequentialIDGenerator())
+	userBatchRepo := newFakeUserBatchRepository()
+	batchSvc := application.NewBatchAppService(sessionSvc, userBatchRepo, newSequentialIDGenerator())
+	userSvc := application.NewUserAppService(userBatchRepo, newFakeMainQuestionCatalog())
 	h := server.New()
-	api.RegisterRoutes(h, "", handler.NewBatchHandler(batchSvc), handler.NewSessionHandler(sessionSvc))
+	api.RegisterRoutes(h, "", handler.NewBatchHandler(batchSvc), handler.NewSessionHandler(sessionSvc), handler.NewUserHandler(userSvc))
 	return h
 }
 

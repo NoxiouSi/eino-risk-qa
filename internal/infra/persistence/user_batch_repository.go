@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -68,4 +69,37 @@ func (r *GORMUserBatchRepository) FindBatch(ctx context.Context, batchID string)
 		return nil, err
 	}
 	return &application.Batch{BatchID: bm.BatchID, UserID: bm.UserID, CreatedAt: bm.CreatedAt}, nil
+}
+
+// FindUser 按 user_id 查询用户记录，将 risk_factor_types 逗号分隔列解析为 []string（过滤空项）；
+// 不存在返回 application.ErrUserNotFound。
+func (r *GORMUserBatchRepository) FindUser(ctx context.Context, userID string) (*application.User, error) {
+	log := logging.FromContext(ctx).With("user_id", userID)
+	var um UserModel
+	if err := r.db.WithContext(ctx).Where("user_id = ?", userID).Take(&um).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Warn("find user: not found")
+			return nil, application.ErrUserNotFound
+		}
+		log.Error("find user: query failed", "error", err.Error())
+		return nil, err
+	}
+	return &application.User{
+		UserID:          um.UserID,
+		Name:            um.Name,
+		RiskFactorTypes: splitRiskFactorTypes(um.RiskFactorTypes),
+	}, nil
+}
+
+// splitRiskFactorTypes 将 "identity,fund_source" 形式的逗号分隔字符串解析为去空白、去空项的切片。
+func splitRiskFactorTypes(raw string) []string {
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
 }

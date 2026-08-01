@@ -48,3 +48,16 @@ type BatchResult struct {
 	CreatedAt time.Time
 	Results   []SessionResult
 }
+
+// MainQuestionItem 单个风险要素类型及其对应的主问题文案（贫血结构体，无业务规则）。
+type MainQuestionItem struct {
+	RiskFactorType riskfactor.RiskFactorType
+	MainQuestion   string
+}
+
+// MainQuestionsResult UserAppService.GetMainQuestions 用例的输出：按用户配置的
+// RiskFactorTypes 顺序组装的主问题列表。
+type MainQuestionsResult struct {
+	UserID string
+	Items  []MainQuestionItem
+}

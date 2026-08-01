@@ -5,6 +5,7 @@ import type {
   BatchRequestDTO,
   BatchResponseDTO,
   ErrorResponseDTO,
+  MainQuestionsResponseDTO,
   SessionDetailDTO,
   SessionResultDTO,
   SSEEvent,
@@ -25,6 +26,12 @@ async function parseJSONOrThrow<T>(res: Response): Promise<T> {
     throw new Error(err?.message ?? `HTTP ${res.status}`)
   }
   return json as T
+}
+
+/** 按用户查询其拥有的风险项及各自对应的主问题（GET /api/v1/users/{user_id}/main-questions）。 */
+export async function getMainQuestions(userId: string): Promise<MainQuestionsResponseDTO> {
+  const res = await fetch(`${BASE}/users/${encodeURIComponent(userId)}/main-questions`)
+  return parseJSONOrThrow<MainQuestionsResponseDTO>(res)
 }
 
 export async function submitBatch(body: Omit<BatchRequestDTO, 'stream'>): Promise<BatchResponseDTO> {

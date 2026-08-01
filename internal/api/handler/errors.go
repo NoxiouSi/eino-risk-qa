@@ -13,6 +13,7 @@ const (
 	CodeUnauthorized         = "UNAUTHORIZED"
 	CodeSessionNotFound      = "SESSION_NOT_FOUND"
 	CodeBatchNotFound        = "BATCH_NOT_FOUND"
+	CodeUserNotFound         = "USER_NOT_FOUND"
 	CodeSessionNotProcessing = "SESSION_NOT_PROCESSING"
 	CodeLLMJudgeFailed       = "LLM_JUDGE_FAILED"
 	CodeInternalError        = "INTERNAL_ERROR"

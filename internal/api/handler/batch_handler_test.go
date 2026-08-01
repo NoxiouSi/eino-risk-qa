@@ -33,12 +33,14 @@ func newJudgementResult(completeness, reasonableness bool, followUpQuestion stri
 func newTestEngine(judger *fakeJudger, sessionRepo *fakeSessionRepository, userBatchRepo *fakeUserBatchRepository) *server.Hertz {
 	sessionSvc := application.NewSessionAppService(judger, sessionRepo)
 	batchSvc := application.NewBatchAppService(sessionSvc, userBatchRepo, newSequentialIDGenerator())
+	userSvc := application.NewUserAppService(userBatchRepo, newFakeMainQuestionCatalog())
 
 	batchHandler := handler.NewBatchHandler(batchSvc)
 	sessionHandler := handler.NewSessionHandler(sessionSvc)
+	userHandler := handler.NewUserHandler(userSvc)
 
 	h := server.New()
-	api.RegisterRoutes(h, "", batchHandler, sessionHandler)
+	api.RegisterRoutes(h, "", batchHandler, sessionHandler, userHandler)
 	return h
 }
 
@@ -105,9 +107,11 @@ func TestBatchHandler_GetBatch_NotFound(t *testing.T) {
 
 func TestBatchHandler_APIKeyAuth_RejectsMissingKey(t *testing.T) {
 	sessionSvc := application.NewSessionAppService(newFakeJudger(), newFakeSessionRepository())
-	batchSvc := application.NewBatchAppService(sessionSvc, newFakeUserBatchRepository(), newSequentialIDGenerator())
+	userBatchRepo := newFakeUserBatchRepository()
+	batchSvc := application.NewBatchAppService(sessionSvc, userBatchRepo, newSequentialIDGenerator())
+	userSvc := application.NewUserAppService(userBatchRepo, newFakeMainQuestionCatalog())
 	h := server.New()
-	api.RegisterRoutes(h, "secret-key", handler.NewBatchHandler(batchSvc), handler.NewSessionHandler(sessionSvc))
+	api.RegisterRoutes(h, "secret-key", handler.NewBatchHandler(batchSvc), handler.NewSessionHandler(sessionSvc), handler.NewUserHandler(userSvc))
 
 	resp := ut.PerformRequest(h.Engine, "GET", "/api/v1/batches/whatever", nil)
 

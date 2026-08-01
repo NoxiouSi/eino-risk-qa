@@ -64,16 +64,19 @@ func main() {
 	judger := llm.NewJudgerAdapter(chatModel)
 	sessionRepo := persistence.NewGORMSessionRepository(db)
 	userBatchRepo := persistence.NewGORMUserBatchRepository(db)
+	mainQuestionRepo := persistence.NewGORMMainQuestionRepository(db)
 	ids := idgen.NewUUIDGenerator()
 
 	sessionSvc := application.NewSessionAppService(judger, sessionRepo)
 	batchSvc := application.NewBatchAppService(sessionSvc, userBatchRepo, ids)
+	userSvc := application.NewUserAppService(userBatchRepo, mainQuestionRepo)
 
 	batchHandler := handler.NewBatchHandler(batchSvc)
 	sessionHandler := handler.NewSessionHandler(sessionSvc)
+	userHandler := handler.NewUserHandler(userSvc)
 
 	h := server.New(server.WithHostPorts(cfg.Server.Addr))
-	api.RegisterRoutes(h, cfg.Auth.APIKey, batchHandler, sessionHandler)
+	api.RegisterRoutes(h, cfg.Auth.APIKey, batchHandler, sessionHandler, userHandler)
 
 	logging.L.Info("eino-risk-qa server listening", "addr", cfg.Server.Addr, "llm_provider", cfg.LLM.Provider)
 	h.Spin()

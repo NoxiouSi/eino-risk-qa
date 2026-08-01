@@ -9,10 +9,25 @@ export interface ErrorPayload {
   message: string
 }
 
-export interface RiskFactorFormItem {
-  riskFactorType: RiskFactorType
-  mainQuestion: string
-  answer: string
+// 与 GET /api/v1/users/{user_id}/main-questions 响应对应的类型。
+export interface MainQuestionItem {
+  risk_factor_type: string
+  main_question: string
+}
+
+export interface MainQuestionsResponseDTO {
+  user_id: string
+  items: MainQuestionItem[]
+}
+
+// 风险要素类型的可读标签，用于聊天流中的标签 chip 展示。
+export const RISK_FACTOR_TYPE_LABELS: Record<string, string> = {
+  identity: '身份信息',
+  fund_source: '资金来源',
+}
+
+export function riskFactorTypeLabel(type: string): string {
+  return RISK_FACTOR_TYPE_LABELS[type] ?? type
 }
 
 export interface RiskFactorItemDTO {
@@ -91,7 +106,7 @@ export type SSEEvent =
   | { type: 'done'; data: SSEDonePayload }
   | { type: 'error'; data: SSEErrorPayload }
 
-// 前端会话卡片的聊天气泡角色：
+// 统一聊天流中的消息气泡角色：
 // question(主问题/追问问题) / answer(用户回答) / system(模型统一收敛消息) / error(出错提示)
 export type BubbleRole = 'question' | 'answer' | 'system' | 'error'
 
