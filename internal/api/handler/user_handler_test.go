@@ -44,7 +44,9 @@ func TestUserHandler_GetMainQuestions_Success(t *testing.T) {
 	require.Len(t, out.Items, 2)
 	assert.Equal(t, "identity", out.Items[0].RiskFactorType)
 	assert.Equal(t, "请说明您的身份信息及职业背景", out.Items[0].MainQuestion)
+	assert.NotNil(t, out.Items[0].Questions, "questions must always be encoded as an array")
 	assert.Equal(t, "fund_source", out.Items[1].RiskFactorType)
+	assert.NotNil(t, out.Items[1].Questions, "questions must always be encoded as an array")
 }
 
 func TestUserHandler_GetMainQuestions_UserNotFound(t *testing.T) {

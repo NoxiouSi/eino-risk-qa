@@ -166,16 +166,14 @@ func (s *RiskFactorSession) MarkLLMError() {
 	s.UpdatedAt = time.Now()
 }
 
-// UserMessage 对外展示文案推导（核心领域规则）：
-// Status==Processing 时返回最新一轮的 follow_up_question；
-// 到达任意终态（Cleared/NotCleared）时统一返回领域常量 ClosingMessage。
-// 其他状态（如 LLMError）返回空字符串，由上层根据 error 字段单独处理。
+// UserMessage 推导单个风险要素会话的展示文案：处理中返回追问，终态仅说明该项无需继续补充。
+// 整个批次的收尾文案必须由批次聚合状态决定，不能由单个会话提前输出。
 func (s *RiskFactorSession) UserMessage() string {
 	switch s.Status {
 	case StatusProcessing:
 		return s.followUpQuestion
 	case StatusCleared, StatusNotCleared:
-		return ClosingMessage
+		return SessionCompletedMessage
 	default:
 		return ""
 	}
@@ -196,6 +194,7 @@ func (s *RiskFactorSession) applyJudgement(question, answer string, judgement *J
 		Answer:         answer,
 		Completeness:   judgement.Completeness,
 		Reasonableness: judgement.Reasonableness,
+		Judgements:     judgement.Questions,
 		CreatedAt:      time.Now(),
 	}
 	s.History = append(s.History, qa)

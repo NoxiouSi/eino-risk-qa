@@ -50,7 +50,7 @@ func TestSessionHandler_SubmitFollowUp_NonStream_CompletesSession(t *testing.T) 
 	var out dto.SessionResult
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
 	assert.Equal(t, "cleared", out.Status)
-	assert.Equal(t, "谢谢您的配合，审核结果将在3个工作日内推送给您。", out.Message)
+	assert.Equal(t, riskfactor.SessionCompletedMessage, out.Message)
 }
 
 func TestSessionHandler_SubmitFollowUp_SessionNotFound(t *testing.T) {
@@ -106,7 +106,7 @@ func TestSessionHandler_SubmitFollowUp_Stream_EmitsSSEFrames(t *testing.T) {
 	assert.Equal(t, consts.StatusOK, resp.Code)
 	assert.Contains(t, resp.Header().Get("Content-Type"), "text/event-stream")
 	events := parseSSEEvents(t, resp.Body.Bytes())
-	assertHasEventType(t, events, "message_delta")
+	assertNotHasEventType(t, events, "message_delta")
 	assertHasEventType(t, events, "result")
 	assertHasEventType(t, events, "done")
 }

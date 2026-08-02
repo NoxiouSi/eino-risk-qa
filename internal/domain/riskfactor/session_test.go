@@ -43,7 +43,7 @@ func TestSubmitInitialAnswer_CompleteAndReasonable_Cleared(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, riskfactor.StatusCleared, s.Status)
 	assert.Nil(t, s.TerminationReason)
-	assert.Equal(t, riskfactor.ClosingMessage, s.UserMessage())
+	assert.Equal(t, riskfactor.SessionCompletedMessage, s.UserMessage())
 	assert.Equal(t, "财务经理", s.ExtractedInfo["occupation"])
 	require.Len(t, s.History, 1)
 	assert.Equal(t, 0, s.History[0].Round)
@@ -66,7 +66,7 @@ func TestSubmitInitialAnswer_CompleteButUnreasonable_NotCleared(t *testing.T) {
 	assert.Equal(t, riskfactor.StatusNotCleared, s.Status)
 	require.NotNil(t, s.TerminationReason)
 	assert.Equal(t, riskfactor.TerminationReasonUnreasonable, *s.TerminationReason)
-	assert.Equal(t, riskfactor.ClosingMessage, s.UserMessage())
+	assert.Equal(t, riskfactor.SessionCompletedMessage, s.UserMessage())
 }
 
 // completeness=false & round<MaxRounds -> 继续 Processing，round+1，记录追问问题
@@ -109,7 +109,7 @@ func TestFollowUpLoop_EndsAssoonAsCompletenessSatisfied(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, riskfactor.StatusCleared, s.Status)
-	assert.Equal(t, riskfactor.ClosingMessage, s.UserMessage())
+	assert.Equal(t, riskfactor.SessionCompletedMessage, s.UserMessage())
 	require.Len(t, s.History, 2)
 	assert.Equal(t, 1, s.History[1].Round)
 	assert.Equal(t, "任职时间是？", s.History[1].Question)
@@ -147,7 +147,7 @@ func TestFollowUpLoop_MaxRoundsReached_NotClearedMaxRounds(t *testing.T) {
 	assert.Equal(t, riskfactor.StatusNotCleared, s.Status)
 	require.NotNil(t, s.TerminationReason)
 	assert.Equal(t, riskfactor.TerminationReasonMaxRoundsIncomplete, *s.TerminationReason)
-	assert.Equal(t, riskfactor.ClosingMessage, s.UserMessage())
+	assert.Equal(t, riskfactor.SessionCompletedMessage, s.UserMessage())
 	assert.Equal(t, 3, s.CurrentRound) // 达到上限后不再增加轮次
 	require.Len(t, s.History, 4)       // round 0,1,2,3 共4条问答记录
 }
@@ -251,6 +251,6 @@ func TestReconstructRiskFactorSession_RestoresFollowUpQuestion(t *testing.T) {
 	})
 
 	assert.Equal(t, riskfactor.StatusNotCleared, s.Status)
-	assert.Equal(t, riskfactor.ClosingMessage, s.UserMessage())
+	assert.Equal(t, riskfactor.SessionCompletedMessage, s.UserMessage())
 	assert.Empty(t, s.History)
 }

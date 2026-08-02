@@ -68,6 +68,23 @@ func TestBatchAppService_SubmitBatch_OneFactorFails_DoesNotAffectOthers(t *testi
 	assert.Equal(t, riskfactor.StatusCleared, result.Results[1].Status) // 另一个要素正常完成，不受影响
 }
 
+func TestBatchAppService_SubmitBatch_StructuredAnswersUseQuestionCatalog(t *testing.T) {
+	judger := newFakeJudger()
+	sessionSvc := application.NewSessionAppService(judger, newFakeSessionRepository())
+	catalog := newFakeMainQuestionCatalog()
+	catalog.trees["identity"] = application.QuestionTree{RiskFactorType: "identity", Root: application.QuestionNode{QuestionText: "统一身份问题", AnswerType: "group", Children: []application.QuestionNode{{QuestionKey: "real_name", QuestionText: "姓名", AnswerType: "text", Required: true, MinSubmitCount: 1, Skills: []application.SkillSpec{{RuleText: "姓名规则"}}}}}}
+	sessionSvc.ConfigureQuestionSupport(catalog, newFakeAttachmentRepository(), t.TempDir(), 3)
+	batchSvc := application.NewBatchAppService(sessionSvc, newFakeUserBatchRepository(), newSequentialIDGenerator())
+
+	result, err := batchSvc.SubmitBatch(context.Background(), application.SubmitBatchInput{UserID: "user_1", RiskFactors: []application.RiskFactorInput{{RiskFactorType: riskfactor.RiskFactorTypeIdentity, Answers: []application.QuestionAnswerInput{{QuestionKey: "real_name", Text: "张三"}}}}})
+
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	assert.Equal(t, "统一身份问题", result.Results[0].MainQuestion)
+	require.Len(t, judger.inputs, 1)
+	assert.Equal(t, "real_name", judger.inputs[0].Answers[0].QuestionKey)
+}
+
 func TestBatchAppService_GetBatch_ReturnsAllSessionsInBatch(t *testing.T) {
 	judger := newFakeJudger()
 	judger.responses["答案1完整且合理，内容足够详细充分"] = &riskfactor.JudgementResult{Completeness: true, Reasonableness: true}
@@ -88,6 +105,46 @@ func TestBatchAppService_GetBatch_ReturnsAllSessionsInBatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, submitted.BatchID, queried.BatchID)
 	assert.Len(t, queried.Results, 2)
+}
+
+func TestBatchAppService_GetBatch_RestoresUserQuestionsAndMissingKeys(t *testing.T) {
+	judger := newFakeJudger()
+	judger.responses["姓名: 代填姓名"] = &riskfactor.JudgementResult{
+		Completeness: false, Reasonableness: true, FollowUpQuestion: "请补充真实姓名",
+		Questions: []riskfactor.QuestionJudgement{{QuestionKey: "real_name", Required: true, Completeness: false, Reasonableness: true}},
+	}
+	sessionRepo := newFakeSessionRepository()
+	catalog := newFakeMainQuestionCatalog()
+	catalog.trees["identity"] = application.QuestionTree{
+		RiskFactorType: "identity",
+		Root: application.QuestionNode{QuestionText: "身份问题", AnswerType: "group", Children: []application.QuestionNode{
+			{QuestionKey: "real_name", QuestionText: "姓名", AnswerType: "text", Required: true, MinSubmitCount: 1},
+		}},
+	}
+	sessionSvc := application.NewSessionAppService(judger, sessionRepo)
+	sessionSvc.ConfigureQuestionSupport(catalog, newFakeAttachmentRepository(), t.TempDir(), 3)
+	batchSvc := application.NewBatchAppService(sessionSvc, newFakeUserBatchRepository(), newSequentialIDGenerator())
+
+	submitted, err := batchSvc.SubmitBatch(context.Background(), application.SubmitBatchInput{
+		UserID: "user_restore", UserName: "恢复用户",
+		RiskFactors: []application.RiskFactorInput{{
+			RiskFactorType: riskfactor.RiskFactorTypeIdentity,
+			Answers:        []application.QuestionAnswerInput{{QuestionKey: "real_name", Text: "代填姓名"}},
+		}},
+	})
+	require.NoError(t, err)
+
+	restored, err := batchSvc.GetBatch(context.Background(), submitted.BatchID)
+	require.NoError(t, err)
+	assert.Equal(t, "user_restore", restored.UserID)
+	assert.Equal(t, "恢复用户", restored.UserName)
+	require.Len(t, restored.Results, 1)
+	assert.Equal(t, []string{"real_name"}, restored.Results[0].MissingQuestionKeys)
+	require.Len(t, restored.Results[0].QuestionJudgements, 1)
+	assert.True(t, restored.Results[0].QuestionJudgements[0].Required)
+	require.Len(t, restored.Results[0].Questions, 1)
+	assert.Equal(t, "姓名", restored.Results[0].Questions[0].QuestionText)
+	assert.Empty(t, restored.Results[0].Questions[0].Skills)
 }
 
 func TestBatchAppService_GetBatch_UnknownBatch_ReturnsErrBatchNotFound(t *testing.T) {

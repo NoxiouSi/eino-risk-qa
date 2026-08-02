@@ -6,12 +6,30 @@ import type {
   BatchResponseDTO,
   ErrorResponseDTO,
   MainQuestionsResponseDTO,
+  QuestionAnswerDTO,
+  AttachmentResponseDTO,
   SessionDetailDTO,
   SessionResultDTO,
   SSEEvent,
 } from '../types'
 
 const BASE = '/api/v1'
+const MODEL_REQUEST_TIMEOUT_MS = 5 * 60 * 1000 + 15 * 1000
+
+async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = MODEL_REQUEST_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('模型分析超时，请稍后重试；若已生成批次，可在调试面板中查询处理结果')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
 
 async function parseJSONOrThrow<T>(res: Response): Promise<T> {
   const text = await res.text()
@@ -28,14 +46,34 @@ async function parseJSONOrThrow<T>(res: Response): Promise<T> {
   return json as T
 }
 
+function parseMainQuestionsResponse(value: unknown): MainQuestionsResponseDTO {
+  if (!value || typeof value !== 'object') {
+    throw new TypeError('问题接口响应格式错误')
+  }
+
+  const response = value as { user_id?: unknown; items?: unknown }
+  if (typeof response.user_id !== 'string' || !Array.isArray(response.items)) {
+    throw new TypeError('问题接口响应格式错误')
+  }
+  for (const item of response.items) {
+    if (!item || typeof item !== 'object') {
+      throw new TypeError('问题接口响应格式错误')
+    }
+    if (!Array.isArray((item as { questions?: unknown }).questions)) {
+      throw new TypeError('问题接口响应格式不兼容：缺少 items[].questions，请重启后端服务后重试')
+    }
+  }
+  return value as MainQuestionsResponseDTO
+}
+
 /** 按用户查询其拥有的风险项及各自对应的主问题（GET /api/v1/users/{user_id}/main-questions）。 */
 export async function getMainQuestions(userId: string): Promise<MainQuestionsResponseDTO> {
   const res = await fetch(`${BASE}/users/${encodeURIComponent(userId)}/main-questions`)
-  return parseJSONOrThrow<MainQuestionsResponseDTO>(res)
+  return parseMainQuestionsResponse(await parseJSONOrThrow<unknown>(res))
 }
 
 export async function submitBatch(body: Omit<BatchRequestDTO, 'stream'>): Promise<BatchResponseDTO> {
-  const res = await fetch(`${BASE}/batches`, {
+  const res = await fetchWithTimeout(`${BASE}/batches`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...body, stream: false }),
@@ -43,13 +81,23 @@ export async function submitBatch(body: Omit<BatchRequestDTO, 'stream'>): Promis
   return parseJSONOrThrow<BatchResponseDTO>(res)
 }
 
-export async function submitFollowUp(sessionId: string, answer: string): Promise<SessionResultDTO> {
-  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/answers`, {
+export async function submitFollowUp(sessionId: string, answers: QuestionAnswerDTO[]): Promise<SessionResultDTO> {
+  const res = await fetchWithTimeout(`${BASE}/sessions/${encodeURIComponent(sessionId)}/answers`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ answer, stream: false }),
+    body: JSON.stringify({ answers, stream: false }),
   })
   return parseJSONOrThrow<SessionResultDTO>(res)
+}
+
+export async function uploadAttachment(userId: string, riskFactorType: string, questionKey: string, file: File): Promise<AttachmentResponseDTO> {
+  const form = new FormData()
+  form.append('user_id', userId)
+  form.append('risk_factor_type', riskFactorType)
+  form.append('question_key', questionKey)
+  form.append('file', file)
+  const res = await fetch(`${BASE}/attachments`, { method: 'POST', body: form })
+  return parseJSONOrThrow<AttachmentResponseDTO>(res)
 }
 
 export async function getBatch(batchId: string): Promise<BatchResponseDTO> {
@@ -93,40 +141,54 @@ function parseSSEChunk(buffer: string): { events: SSEEvent[]; rest: string } {
   return { events, rest }
 }
 
-/** 通用的流式 POST 请求 + SSE 帧解析，通过 onEvent 回调逐帧上报。 */
-async function streamPost(url: string, body: unknown, onEvent: (event: SSEEvent) => void): Promise<void> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!res.ok || !res.body) {
-    const errText = await res.text().catch(() => '')
-    let message = `HTTP ${res.status}`
-    try {
-      const parsed = JSON.parse(errText) as ErrorResponseDTO
-      if (parsed?.message) message = parsed.message
-    } catch {
-      /* ignore */
-    }
-    throw new Error(message)
+async function streamBodyOrThrow(res: Response): Promise<ReadableStream<Uint8Array>> {
+  if (res.ok && res.body) return res.body
+  const errText = await res.text().catch(() => '')
+  let message = `HTTP ${res.status}`
+  try {
+    const parsed = JSON.parse(errText) as ErrorResponseDTO
+    if (parsed?.message) message = parsed.message
+  } catch {
+    /* ignore */
   }
+  throw new Error(message)
+}
 
-  const reader = res.body.getReader()
+async function consumeSSEStream(body: ReadableStream<Uint8Array>, onEvent: (event: SSEEvent) => void): Promise<void> {
+  const reader = body.getReader()
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
     buffer += decoder.decode(value, { stream: true })
-    const { events, rest } = parseSSEChunk(buffer)
-    buffer = rest
-    for (const ev of events) onEvent(ev)
+    const parsed = parseSSEChunk(buffer)
+    buffer = parsed.rest
+    for (const event of parsed.events) onEvent(event)
   }
-  // flush 尾部残留（服务端应始终以空行收尾，这里做兜底）
-  if (buffer.trim()) {
-    const { events } = parseSSEChunk(buffer + '\n\n')
-    for (const ev of events) onEvent(ev)
+  if (!buffer.trim()) return
+  for (const event of parseSSEChunk(buffer + '\n\n').events) onEvent(event)
+}
+
+/** 通用的流式 POST 请求 + SSE 帧解析，通过 onEvent 回调逐帧上报。 */
+async function streamPost(url: string, body: unknown, onEvent: (event: SSEEvent) => void): Promise<void> {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), MODEL_REQUEST_TIMEOUT_MS)
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+    await consumeSSEStream(await streamBodyOrThrow(res), onEvent)
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('模型分析超时，请稍后重试；若已生成批次，可在调试面板中查询处理结果')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
   }
 }
 
@@ -139,12 +201,12 @@ export function submitBatchStream(
 
 export function submitFollowUpStream(
   sessionId: string,
-  answer: string,
+  answers: QuestionAnswerDTO[],
   onEvent: (event: SSEEvent) => void,
 ): Promise<void> {
   return streamPost(
     `${BASE}/sessions/${encodeURIComponent(sessionId)}/answers`,
-    { answer, stream: true },
+    { answers, stream: true },
     onEvent,
   )
 }

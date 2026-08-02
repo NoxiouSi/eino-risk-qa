@@ -1,6 +1,8 @@
 package persistence
 
 import (
+	"github.com/google/uuid"
+
 	"github.com/NoxiouSi/eino-risk-qa/internal/domain/riskfactor"
 )
 
@@ -14,6 +16,7 @@ func toDomain(sm *RiskFactorSessionModel, qas []QARecordModel) *riskfactor.RiskF
 			Answer:         qa.Answer,
 			Completeness:   boolValue(qa.Completeness),
 			Reasonableness: boolValue(qa.Reasonableness),
+			Judgements:     toQuestionJudgements(qa.QuestionJudgements),
 			CreatedAt:      qa.CreatedAt,
 		})
 	}
@@ -95,16 +98,66 @@ func toQARecordModels(s *riskfactor.RiskFactorSession, fromRound int) []QARecord
 		completeness := qa.Completeness
 		reasonableness := qa.Reasonableness
 		records = append(records, QARecordModel{
-			SessionID:      s.ID,
-			Round:          qa.Round,
-			Question:       qa.Question,
-			Answer:         qa.Answer,
-			Completeness:   &completeness,
-			Reasonableness: &reasonableness,
-			CreatedAt:      qa.CreatedAt,
+			SessionID:          s.ID,
+			Round:              qa.Round,
+			Question:           qa.Question,
+			Answer:             qa.Answer,
+			Completeness:       &completeness,
+			Reasonableness:     &reasonableness,
+			QuestionJudgements: fromQuestionJudgements(qa.Judgements),
+			CreatedAt:          qa.CreatedAt,
 		})
 	}
 	return records
+}
+
+func toQuestionSubmissionModels(s *riskfactor.RiskFactorSession, fromRound int) []QuestionSubmissionModel {
+	var result []QuestionSubmissionModel
+	for _, qa := range s.History {
+		if qa.Round < fromRound {
+			continue
+		}
+		for _, answer := range qa.Answers {
+			if answer.Text != "" {
+				text := answer.Text
+				result = append(result, QuestionSubmissionModel{SubmissionID: uuid.NewString(), SessionID: s.ID, Round: qa.Round, RiskFactorType: string(s.RiskFactorType), QuestionKey: answer.QuestionKey, ValueType: "text", TextValue: &text, CreatedAt: qa.CreatedAt})
+			}
+			for _, fileIDValue := range answer.FileIDs {
+				fileID := fileIDValue
+				valueType := answer.ValueType
+				if valueType == "" {
+					valueType = "file"
+				}
+				result = append(result, QuestionSubmissionModel{SubmissionID: uuid.NewString(), SessionID: s.ID, Round: qa.Round, RiskFactorType: string(s.RiskFactorType), QuestionKey: answer.QuestionKey, ValueType: valueType, FileID: &fileID, CreatedAt: qa.CreatedAt})
+			}
+		}
+	}
+	return result
+}
+
+func fromQuestionJudgements(items []riskfactor.QuestionJudgement) JSONSlice {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make(JSONSlice, 0, len(items))
+	for _, item := range items {
+		result = append(result, map[string]interface{}{"question_key": item.QuestionKey, "required": item.Required, "completeness": item.Completeness, "reasonableness": item.Reasonableness, "note": item.Note})
+	}
+	return result
+}
+
+func toQuestionJudgements(items JSONSlice) []riskfactor.QuestionJudgement {
+	result := make([]riskfactor.QuestionJudgement, 0, len(items))
+	for _, item := range items {
+		q := riskfactor.QuestionJudgement{}
+		q.QuestionKey, _ = item["question_key"].(string)
+		q.Required, _ = item["required"].(bool)
+		q.Completeness, _ = item["completeness"].(bool)
+		q.Reasonableness, _ = item["reasonableness"].(bool)
+		q.Note, _ = item["note"].(string)
+		result = append(result, q)
+	}
+	return result
 }
 
 func boolValue(b *bool) bool {

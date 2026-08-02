@@ -17,11 +17,19 @@ func TestLoad_NoConfigFile_UsesDefaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ":8080", cfg.Server.Addr)
 	assert.Equal(t, "mock", cfg.LLM.Provider)
+	assert.Equal(t, 300, cfg.LLM.RequestTimeoutSeconds)
+	assert.Equal(t, "https://ark.cn-beijing.volces.com/api/v3", cfg.LLM.Ark.BaseURL)
+	assert.Equal(t, "doubao-seed-2-1-turbo-260628", cfg.LLM.Ark.Model)
 	assert.Equal(t, "eino_risk_qa", cfg.MySQL.Database)
 	assert.Equal(t, "info", cfg.Log.Level)
+	assert.Equal(t, "./data/uploads", cfg.Storage.LocalDir)
+	assert.EqualValues(t, 10*1024*1024, cfg.Storage.MaxFileBytes)
+	assert.Equal(t, 5, cfg.Storage.MaxFilesPerQuestion)
+	assert.Contains(t, cfg.Storage.AllowedMIMETypes, "image/jpeg")
 }
 
 func TestLoad_FromYAMLFile_OverridesDefaults(t *testing.T) {
+	t.Setenv("ARK_API_KEY", "")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	yaml := `
@@ -39,6 +47,10 @@ llm:
     api_key: "sk-test"
     base_url: "https://api.example.com/v1"
     model: "gpt-4o-mini"
+  ark:
+    api_key: "ark-file-key"
+    base_url: "https://ark.example.com/api/v3"
+    model: "doubao-test-model"
   deepseek:
     base_url: "https://api.deepseek.com/beta"
     model: "deepseek-reasoner"
@@ -57,6 +69,9 @@ log:
 	assert.Equal(t, 3307, cfg.MySQL.Port)
 	assert.Equal(t, "openai", cfg.LLM.Provider)
 	assert.Equal(t, "sk-test", cfg.LLM.OpenAI.APIKey)
+	assert.Equal(t, "ark-file-key", cfg.LLM.Ark.APIKey)
+	assert.Equal(t, "https://ark.example.com/api/v3", cfg.LLM.Ark.BaseURL)
+	assert.Equal(t, "doubao-test-model", cfg.LLM.Ark.Model)
 	assert.Equal(t, "deepseek-reasoner", cfg.LLM.DeepSeek.Model)
 	assert.Equal(t, "https://api.deepseek.com/beta", cfg.LLM.DeepSeek.BaseURL)
 	assert.Equal(t, "my-secret-key", cfg.Auth.APIKey)
@@ -82,6 +97,15 @@ func TestLoad_DeepSeekAPIKey_InjectedViaEnvironmentVariable(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "sk-from-env", cfg.LLM.DeepSeek.APIKey)
+}
+
+func TestLoad_ArkAPIKey_InjectedViaEnvironmentVariable(t *testing.T) {
+	t.Setenv("ARK_API_KEY", "ark-from-env")
+
+	cfg, err := config.Load("")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ark-from-env", cfg.LLM.Ark.APIKey)
 }
 
 func TestLoad_EnvironmentVariableOverridesFileAndDefault(t *testing.T) {

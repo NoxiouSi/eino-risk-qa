@@ -10,41 +10,32 @@ import (
 	"github.com/NoxiouSi/eino-risk-qa/internal/infra/persistence"
 )
 
-// 以下测试使用独立的 test_type_a/test_type_b 而非现有 identity/fund_source，
-// 避免污染本地联调所依赖的 seed 数据，并在测试结束后清理。
-
-func TestGORMMainQuestionRepository_FindMainQuestions(t *testing.T) {
+func TestGORMMainQuestionRepository_FindQuestionTrees(t *testing.T) {
 	db := setupTestDB(t)
 	repo := persistence.NewGORMMainQuestionRepository(db)
 	ctx := context.Background()
 
-	require.NoError(t, db.Exec(
-		"INSERT INTO risk_factor_main_questions (risk_factor_type, main_question) VALUES (?, ?) "+
-			"ON DUPLICATE KEY UPDATE main_question = VALUES(main_question)",
-		"test_type_a", "测试主问题A").Error)
-	require.NoError(t, db.Exec(
-		"INSERT INTO risk_factor_main_questions (risk_factor_type, main_question) VALUES (?, ?) "+
-			"ON DUPLICATE KEY UPDATE main_question = VALUES(main_question)",
-		"test_type_b", "测试主问题B").Error)
-	t.Cleanup(func() {
-		db.Exec("DELETE FROM risk_factor_main_questions WHERE risk_factor_type IN (?, ?)", "test_type_a", "test_type_b")
-	})
+	root := persistence.RiskFactorQuestionModel{RiskFactorType: "test_type_a", QuestionKey: "test_main", QuestionText: "测试主问题A", AnswerType: "group", Required: true, Enabled: true}
+	require.NoError(t, db.Create(&root).Error)
+	child := persistence.RiskFactorQuestionModel{RiskFactorType: "test_type_a", QuestionKey: "test_text", ParentID: &root.ID, QuestionText: "测试文本", AnswerType: "text", Required: true, MinSubmitCount: 1, SortOrder: 10, Enabled: true}
+	require.NoError(t, db.Create(&child).Error)
+	skill := persistence.AuditSkillModel{SkillKey: "test_rule", Name: "测试规则", RuleText: "必须清晰具体", EvidenceType: "text", Enabled: true}
+	require.NoError(t, db.Create(&skill).Error)
+	require.NoError(t, db.Create(&persistence.QuestionSkillRefModel{QuestionID: child.ID, SkillID: skill.ID, SortOrder: 10}).Error)
 
-	result, err := repo.FindMainQuestions(ctx, []string{"test_type_a", "test_type_b", "test_type_missing"})
-
+	result, err := repo.FindQuestionTrees(ctx, []string{"test_type_a", "missing"})
 	require.NoError(t, err)
-	assert.Equal(t, map[string]string{
-		"test_type_a": "测试主问题A",
-		"test_type_b": "测试主问题B",
-	}, result)
+	require.Contains(t, result, "test_type_a")
+	assert.Equal(t, "测试主问题A", result["test_type_a"].Root.QuestionText)
+	require.Len(t, result["test_type_a"].Root.Children, 1)
+	assert.Equal(t, "test_text", result["test_type_a"].Root.Children[0].QuestionKey)
+	require.Len(t, result["test_type_a"].Root.Children[0].Skills, 1)
+	assert.Equal(t, "test_rule", result["test_type_a"].Root.Children[0].Skills[0].SkillKey)
 }
 
-func TestGORMMainQuestionRepository_FindMainQuestions_EmptyInput(t *testing.T) {
-	db := setupTestDB(t)
-	repo := persistence.NewGORMMainQuestionRepository(db)
-
-	result, err := repo.FindMainQuestions(context.Background(), nil)
-
+func TestGORMMainQuestionRepository_FindQuestionTrees_EmptyInput(t *testing.T) {
+	repo := persistence.NewGORMMainQuestionRepository(setupTestDB(t))
+	result, err := repo.FindQuestionTrees(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Empty(t, result)
 }

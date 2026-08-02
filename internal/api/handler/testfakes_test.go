@@ -52,8 +52,6 @@ func (f *fakeJudger) JudgeStream(ctx context.Context, input riskfactor.JudgeInpu
 			for _, r := range result.FollowUpQuestion {
 				events <- riskfactor.JudgeStreamEvent{SessionID: input.SessionID, Type: riskfactor.StreamEventMessageDelta, MessageDelta: string(r)}
 			}
-		} else if result.Completeness {
-			events <- riskfactor.JudgeStreamEvent{SessionID: input.SessionID, Type: riskfactor.StreamEventMessageDelta, MessageDelta: riskfactor.ClosingMessage}
 		}
 		events <- riskfactor.JudgeStreamEvent{SessionID: input.SessionID, Type: riskfactor.StreamEventResult, Result: result}
 	}()
@@ -162,17 +160,17 @@ func newFakeMainQuestionCatalog() *fakeMainQuestionCatalog {
 	return &fakeMainQuestionCatalog{questions: map[string]string{}}
 }
 
-func (c *fakeMainQuestionCatalog) FindMainQuestions(ctx context.Context, riskFactorTypes []string) (map[string]string, error) {
-	result := make(map[string]string, len(riskFactorTypes))
+func (c *fakeMainQuestionCatalog) FindQuestionTrees(ctx context.Context, riskFactorTypes []string) (map[string]application.QuestionTree, error) {
+	result := make(map[string]application.QuestionTree, len(riskFactorTypes))
 	for _, t := range riskFactorTypes {
 		if q, ok := c.questions[t]; ok {
-			result[t] = q
+			result[t] = application.QuestionTree{RiskFactorType: t, Root: application.QuestionNode{RiskFactorType: t, QuestionKey: t + "_main", QuestionText: q, AnswerType: "group"}}
 		}
 	}
 	return result, nil
 }
 
-var _ application.MainQuestionCatalog = (*fakeMainQuestionCatalog)(nil)
+var _ application.RiskFactorQuestionCatalog = (*fakeMainQuestionCatalog)(nil)
 
 // sequentialIDGenerator 生成可预测的 ID，便于测试断言。
 type sequentialIDGenerator struct {

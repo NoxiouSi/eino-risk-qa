@@ -60,6 +60,12 @@ func (r *GORMSessionRepository) Save(ctx context.Context, session *riskfactor.Ri
 					return err
 				}
 			}
+			submissions := toQuestionSubmissionModels(session, 0)
+			if len(submissions) > 0 {
+				if err := tx.Create(&submissions).Error; err != nil {
+					return err
+				}
+			}
 			return nil
 		case err != nil:
 			return err
@@ -112,6 +118,12 @@ func (r *GORMSessionRepository) Save(ctx context.Context, session *riskfactor.Ri
 		records := toQARecordModels(session, nextRound)
 		if len(records) > 0 {
 			if err := tx.Create(&records).Error; err != nil {
+				return err
+			}
+		}
+		submissions := toQuestionSubmissionModels(session, nextRound)
+		if len(submissions) > 0 {
+			if err := tx.Create(&submissions).Error; err != nil {
 				return err
 			}
 		}

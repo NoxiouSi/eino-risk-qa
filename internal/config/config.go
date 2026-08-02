@@ -9,11 +9,12 @@ import (
 
 // Config 是服务的完整配置结构，对应 configs/config.yaml。
 type Config struct {
-	Server ServerConfig `mapstructure:"server"`
-	MySQL  MySQLConfig  `mapstructure:"mysql"`
-	LLM    LLMConfig    `mapstructure:"llm"`
-	Auth   AuthConfig   `mapstructure:"auth"`
-	Log    LogConfig    `mapstructure:"log"`
+	Server  ServerConfig  `mapstructure:"server"`
+	MySQL   MySQLConfig   `mapstructure:"mysql"`
+	LLM     LLMConfig     `mapstructure:"llm"`
+	Storage StorageConfig `mapstructure:"storage"`
+	Auth    AuthConfig    `mapstructure:"auth"`
+	Log     LogConfig     `mapstructure:"log"`
 }
 
 // ServerConfig HTTP 服务配置。
@@ -38,13 +39,30 @@ func (c MySQLConfig) DSN() string {
 
 // LLMConfig LLM Provider 可插拔配置，对应 docs/DESIGN.md 中的 factory.go 分发逻辑。
 type LLMConfig struct {
-	Provider string         `mapstructure:"provider"` // mock | openai | deepseek
-	OpenAI   OpenAIConfig   `mapstructure:"openai"`
-	DeepSeek DeepSeekConfig `mapstructure:"deepseek"`
+	Provider              string         `mapstructure:"provider"`
+	VisionProvider        string         `mapstructure:"vision_provider"`
+	RequestTimeoutSeconds int            `mapstructure:"request_timeout_seconds"`
+	OpenAI                OpenAIConfig   `mapstructure:"openai"`
+	Ark                   ArkConfig      `mapstructure:"ark"`
+	DeepSeek              DeepSeekConfig `mapstructure:"deepseek"`
+}
+
+type StorageConfig struct {
+	LocalDir            string   `mapstructure:"local_dir"`
+	MaxFileBytes        int64    `mapstructure:"max_file_bytes"`
+	MaxFilesPerQuestion int      `mapstructure:"max_files_per_question"`
+	AllowedMIMETypes    []string `mapstructure:"allowed_mime_types"`
 }
 
 // OpenAIConfig OpenAI 兼容协议配置。
 type OpenAIConfig struct {
+	APIKey  string `mapstructure:"api_key"`
+	BaseURL string `mapstructure:"base_url"`
+	Model   string `mapstructure:"model"`
+}
+
+// ArkConfig 火山引擎 Ark OpenAI 兼容接口配置。APIKey 仅通过 ARK_API_KEY 注入。
+type ArkConfig struct {
 	APIKey  string `mapstructure:"api_key"`
 	BaseURL string `mapstructure:"base_url"`
 	Model   string `mapstructure:"model"`
@@ -102,7 +120,15 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("mysql.user", "eino_risk_qa")
 	v.SetDefault("mysql.database", "eino_risk_qa")
 	v.SetDefault("llm.provider", "mock")
+	v.SetDefault("llm.vision_provider", "")
+	v.SetDefault("llm.request_timeout_seconds", 300)
+	v.SetDefault("llm.ark.base_url", "https://ark.cn-beijing.volces.com/api/v3")
+	v.SetDefault("llm.ark.model", "doubao-seed-2-1-turbo-260628")
 	v.SetDefault("llm.deepseek.model", "deepseek-chat")
+	v.SetDefault("storage.local_dir", "./data/uploads")
+	v.SetDefault("storage.max_file_bytes", 10*1024*1024)
+	v.SetDefault("storage.max_files_per_question", 5)
+	v.SetDefault("storage.allowed_mime_types", []string{"image/jpeg", "image/png", "image/webp"})
 	v.SetDefault("auth.api_key", "")
 	v.SetDefault("log.level", "info")
 }
@@ -112,12 +138,15 @@ func bindAllEnvKeys(v *viper.Viper) {
 	keys := []string{
 		"server.addr",
 		"mysql.host", "mysql.port", "mysql.user", "mysql.password", "mysql.database",
-		"llm.provider", "llm.openai.api_key", "llm.openai.base_url", "llm.openai.model",
+		"llm.provider", "llm.vision_provider", "llm.request_timeout_seconds", "llm.openai.api_key", "llm.openai.base_url", "llm.openai.model",
+		"llm.ark.base_url", "llm.ark.model",
 		"llm.deepseek.api_key", "llm.deepseek.base_url", "llm.deepseek.model",
+		"storage.local_dir", "storage.max_file_bytes", "storage.max_files_per_question", "storage.allowed_mime_types",
 		"auth.api_key",
 		"log.level",
 	}
 	for _, k := range keys {
 		_ = v.BindEnv(k)
 	}
+	_ = v.BindEnv("llm.ark.api_key", "ARK_API_KEY")
 }

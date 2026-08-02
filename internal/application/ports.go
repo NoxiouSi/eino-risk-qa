@@ -43,10 +43,28 @@ type UserBatchRepository interface {
 	FindUser(ctx context.Context, userID string) (*User, error)
 }
 
-// MainQuestionCatalog 应用层端口：查询风险要素类型对应的全局固定主问题文案。
-// 由 infra/persistence 实现；不下沉到 domain 层，因为该映射是全局配置数据，不涉及状态机或业务规则。
-type MainQuestionCatalog interface {
-	// FindMainQuestions 按给定的风险要素类型批量查询对应主问题，返回 riskFactorType -> mainQuestion 的映射；
-	// 若某个类型在映射表中不存在，结果 map 中不包含该 key（由调用方决定如何处理缺失）。
-	FindMainQuestions(ctx context.Context, riskFactorTypes []string) (map[string]string, error)
+// RiskFactorQuestionCatalog 查询风险要素的统一层级问题配置及其审核 Skill。
+type RiskFactorQuestionCatalog interface {
+	FindQuestionTrees(ctx context.Context, riskFactorTypes []string) (map[string]QuestionTree, error)
+}
+
+// UploadedFile 是应用层使用的文件元数据，不暴露真实存储根目录。
+type UploadedFile struct {
+	FileID         string
+	UserID         string
+	RiskFactorType string
+	QuestionKey    string
+	OriginalName   string
+	StoredPath     string
+	MIMEType       string
+	SizeBytes      int64
+	SHA256         string
+	CreatedAt      time.Time
+}
+
+// AttachmentRepository 保存并按归属查询上传文件元数据。
+type AttachmentRepository interface {
+	Create(ctx context.Context, file UploadedFile) error
+	FindOwned(ctx context.Context, fileID, userID, riskFactorType, questionKey string) (*UploadedFile, error)
+	CountOwned(ctx context.Context, userID, riskFactorType, questionKey string) (int64, error)
 }

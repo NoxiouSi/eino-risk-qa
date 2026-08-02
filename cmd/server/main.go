@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"os"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"gorm.io/driver/mysql"
@@ -43,41 +44,67 @@ func main() {
 	}
 	logging.L.Info("mysql connected", "host", cfg.MySQL.Host, "port", cfg.MySQL.Port, "database", cfg.MySQL.Database)
 
-	chatModel, err := llm.NewToolCallingChatModel(context.Background(), llm.FactoryConfig{
-		Provider: llm.Provider(cfg.LLM.Provider),
-		OpenAI: llm.OpenAIConfig{
-			APIKey:  cfg.LLM.OpenAI.APIKey,
-			BaseURL: cfg.LLM.OpenAI.BaseURL,
-			Model:   cfg.LLM.OpenAI.Model,
-		},
-		DeepSeek: llm.DeepSeekConfig{
-			APIKey:  cfg.LLM.DeepSeek.APIKey,
-			BaseURL: cfg.LLM.DeepSeek.BaseURL,
-			Model:   cfg.LLM.DeepSeek.Model,
-		},
-	})
+	chatModel, err := llm.NewToolCallingChatModel(context.Background(), modelFactoryConfig(cfg, cfg.LLM.Provider))
 	if err != nil {
 		logging.L.Error("construct chat model failed", "provider", cfg.LLM.Provider, "error", err.Error())
 		os.Exit(1)
 	}
 
 	judger := llm.NewJudgerAdapter(chatModel)
+	judger.ConfigureRequestTimeout(time.Duration(cfg.LLM.RequestTimeoutSeconds) * time.Second)
+	judger.ConfigurePrimaryVisionSupport(llm.ProviderSupportsVision(llm.Provider(cfg.LLM.Provider)))
+	if cfg.LLM.VisionProvider != "" {
+		if !llm.ProviderSupportsVision(llm.Provider(cfg.LLM.VisionProvider)) {
+			logging.L.Error("configured vision provider does not support image input", "provider", cfg.LLM.VisionProvider)
+			os.Exit(1)
+		}
+		visionModel, visionErr := llm.NewToolCallingChatModel(context.Background(), modelFactoryConfig(cfg, cfg.LLM.VisionProvider))
+		if visionErr != nil {
+			logging.L.Error("construct vision model failed", "error", visionErr.Error())
+			os.Exit(1)
+		}
+		judger.ConfigureVisionModel(visionModel)
+	}
 	sessionRepo := persistence.NewGORMSessionRepository(db)
 	userBatchRepo := persistence.NewGORMUserBatchRepository(db)
-	mainQuestionRepo := persistence.NewGORMMainQuestionRepository(db)
+	questionCatalog := persistence.NewGORMMainQuestionRepository(db)
+	attachmentRepo := persistence.NewGORMAttachmentRepository(db)
 	ids := idgen.NewUUIDGenerator()
 
 	sessionSvc := application.NewSessionAppService(judger, sessionRepo)
+	sessionSvc.ConfigureQuestionSupport(questionCatalog, attachmentRepo, cfg.Storage.LocalDir, cfg.Storage.MaxFilesPerQuestion)
 	batchSvc := application.NewBatchAppService(sessionSvc, userBatchRepo, ids)
-	userSvc := application.NewUserAppService(userBatchRepo, mainQuestionRepo)
+	userSvc := application.NewUserAppService(userBatchRepo, questionCatalog)
 
 	batchHandler := handler.NewBatchHandler(batchSvc)
 	sessionHandler := handler.NewSessionHandler(sessionSvc)
 	userHandler := handler.NewUserHandler(userSvc)
+	attachmentHandler := handler.NewAttachmentHandler(attachmentRepo, cfg.Storage, questionCatalog)
 
 	h := server.New(server.WithHostPorts(cfg.Server.Addr))
-	api.RegisterRoutes(h, cfg.Auth.APIKey, batchHandler, sessionHandler, userHandler)
+	api.RegisterRoutes(h, cfg.Auth.APIKey, batchHandler, sessionHandler, userHandler, attachmentHandler)
 
 	logging.L.Info("eino-risk-qa server listening", "addr", cfg.Server.Addr, "llm_provider", cfg.LLM.Provider)
 	h.Spin()
+}
+
+func modelFactoryConfig(cfg *config.Config, provider string) llm.FactoryConfig {
+	return llm.FactoryConfig{
+		Provider: llm.Provider(provider),
+		OpenAI: llm.OpenAIConfig{
+			APIKey:  cfg.LLM.OpenAI.APIKey,
+			BaseURL: cfg.LLM.OpenAI.BaseURL,
+			Model:   cfg.LLM.OpenAI.Model,
+		},
+		Ark: llm.ArkConfig{
+			APIKey:  cfg.LLM.Ark.APIKey,
+			BaseURL: cfg.LLM.Ark.BaseURL,
+			Model:   cfg.LLM.Ark.Model,
+		},
+		DeepSeek: llm.DeepSeekConfig{
+			APIKey:  cfg.LLM.DeepSeek.APIKey,
+			BaseURL: cfg.LLM.DeepSeek.BaseURL,
+			Model:   cfg.LLM.DeepSeek.Model,
+		},
+	}
 }

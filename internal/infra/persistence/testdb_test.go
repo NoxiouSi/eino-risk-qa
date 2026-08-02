@@ -8,6 +8,8 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+
+	"github.com/NoxiouSi/eino-risk-qa/internal/infra/persistence"
 )
 
 // setupTestDB 连接本机测试库 eino_risk_qa_test（见 docs/MYSQL_SETUP.md），
@@ -25,10 +27,14 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("connect test db %q failed: %v (see docs/MYSQL_SETUP.md to set up eino_risk_qa_test)", dsn, err)
 	}
 
+	if err := db.AutoMigrate(&persistence.RiskFactorQuestionModel{}, &persistence.AuditSkillModel{}, &persistence.QuestionSkillRefModel{}, &persistence.UploadedFileModel{}, &persistence.QuestionSubmissionModel{}, &persistence.QARecordModel{}); err != nil {
+		t.Fatalf("auto migrate test models failed: %v", err)
+	}
+
 	if err := db.Exec("SET FOREIGN_KEY_CHECKS=0").Error; err != nil {
 		t.Fatalf("disable fk checks failed: %v", err)
 	}
-	for _, table := range []string{"qa_records", "risk_factor_sessions", "batches", "users"} {
+	for _, table := range []string{"question_submissions", "uploaded_files", "question_skill_refs", "audit_skills", "risk_factor_questions", "qa_records", "risk_factor_sessions", "batches", "users"} {
 		if err := db.Exec(fmt.Sprintf("TRUNCATE TABLE `%s`", table)).Error; err != nil {
 			t.Fatalf("truncate table %s failed: %v", table, err)
 		}

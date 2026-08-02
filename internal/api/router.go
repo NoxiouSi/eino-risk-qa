@@ -8,7 +8,7 @@ import (
 )
 
 // RegisterRoutes 注册 /api/v1 下的全部路由，并挂载请求日志中间件与 API Key 鉴权中间件。
-func RegisterRoutes(h *server.Hertz, apiKey string, batchHandler *handler.BatchHandler, sessionHandler *handler.SessionHandler, userHandler *handler.UserHandler) {
+func RegisterRoutes(h *server.Hertz, apiKey string, batchHandler *handler.BatchHandler, sessionHandler *handler.SessionHandler, userHandler *handler.UserHandler, attachmentHandlers ...*handler.AttachmentHandler) {
 	v1 := h.Group("/api/v1", middleware.RequestLogger(), middleware.APIKeyAuth(apiKey))
 
 	v1.POST("/batches", batchHandler.SubmitBatch)
@@ -16,4 +16,7 @@ func RegisterRoutes(h *server.Hertz, apiKey string, batchHandler *handler.BatchH
 	v1.POST("/sessions/:session_id/answers", sessionHandler.SubmitFollowUp)
 	v1.GET("/sessions/:session_id", sessionHandler.GetSession)
 	v1.GET("/users/:user_id/main-questions", userHandler.GetMainQuestions)
+	if len(attachmentHandlers) > 0 && attachmentHandlers[0] != nil {
+		v1.POST("/attachments", attachmentHandlers[0].Upload)
+	}
 }

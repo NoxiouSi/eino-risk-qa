@@ -36,15 +36,29 @@ func (h *SessionHandler) SubmitFollowUp(ctx context.Context, c *app.RequestConte
 		writeError(c, http.StatusBadRequest, CodeInvalidParam, "invalid request body")
 		return
 	}
-	if req.Answer == "" {
-		log.Warn("submit follow-up: empty answer", "session_id", sessionID)
-		writeError(c, http.StatusBadRequest, CodeInvalidParam, "answer is required")
+	if len(req.Answers) == 0 && req.Answer == "" {
+		log.Warn("submit follow-up: empty answers", "session_id", sessionID)
+		writeError(c, http.StatusBadRequest, CodeInvalidParam, "answers are required")
 		return
+	}
+	answers := make([]application.QuestionAnswerInput, 0, len(req.Answers))
+	for _, answer := range req.Answers {
+		if answer.QuestionKey == "" || (answer.Text == "" && len(answer.FileIDs) == 0) || (answer.Text != "" && len(answer.FileIDs) > 0) {
+			writeError(c, http.StatusBadRequest, CodeInvalidParam, "each answer requires question_key and exactly one of text or file_ids")
+			return
+		}
+		answers = append(answers, application.QuestionAnswerInput{QuestionKey: answer.QuestionKey, Text: answer.Text, FileIDs: answer.FileIDs})
 	}
 	log.Info("submit follow-up: accepted", "session_id", sessionID, "stream", req.Stream)
 
 	if !req.Stream {
-		result, err := h.sessionSvc.SubmitFollowUp(ctx, sessionID, req.Answer)
+		var result application.SessionResult
+		var err error
+		if len(answers) > 0 {
+			result, err = h.sessionSvc.SubmitFollowUpQuestions(ctx, sessionID, answers)
+		} else {
+			result, err = h.sessionSvc.SubmitFollowUp(ctx, sessionID, req.Answer)
+		}
 		if err != nil {
 			log.Warn("submit follow-up: failed", "session_id", sessionID, "error", err.Error())
 			writeSubmitFollowUpError(c, err)
@@ -64,7 +78,11 @@ func (h *SessionHandler) SubmitFollowUp(ctx context.Context, c *app.RequestConte
 	go func() {
 		defer pw.Close()
 		log.Info("submit follow-up (stream): started", "session_id", sessionID)
-		h.sessionSvc.SubmitFollowUpStream(ctx, sessionID, req.Answer, newSSEForwarder(pw))
+		if len(answers) > 0 {
+			h.sessionSvc.SubmitFollowUpQuestionsStream(ctx, sessionID, answers, newSSEForwarder(pw))
+		} else {
+			h.sessionSvc.SubmitFollowUpStream(ctx, sessionID, req.Answer, newSSEForwarder(pw))
+		}
 		log.Info("submit follow-up (stream): finished", "session_id", sessionID)
 	}()
 }

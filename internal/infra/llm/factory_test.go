@@ -50,3 +50,31 @@ func TestNewToolCallingChatModel_DeepSeekProvider_MissingModel_ReturnsError(t *t
 
 	assert.Error(t, err)
 }
+
+func TestNewToolCallingChatModel_ArkProvider_MissingAPIKeyReturnsError(t *testing.T) {
+	cm, err := llm.NewToolCallingChatModel(context.Background(), llm.FactoryConfig{
+		Provider: llm.ProviderArk,
+		Ark: llm.ArkConfig{
+			BaseURL: "https://ark.cn-beijing.volces.com/api/v3",
+			Model:   "doubao-seed-2-1-turbo-260628",
+		},
+	})
+
+	assert.Nil(t, cm)
+	assert.ErrorIs(t, err, llm.ErrMissingAPIKey)
+}
+
+func TestNewToolCallingChatModel_ArkProvider_ConstructsSuccessfully(t *testing.T) {
+	cm, err := llm.NewToolCallingChatModel(context.Background(), llm.FactoryConfig{
+		Provider: llm.ProviderArk,
+		Ark: llm.ArkConfig{
+			APIKey:  "ark-test-placeholder",
+			BaseURL: "https://ark.cn-beijing.volces.com/api/v3",
+			Model:   "doubao-seed-2-1-turbo-260628",
+		},
+	})
+
+	require.NoError(t, err)
+	assert.NotNil(t, cm)
+	assert.True(t, llm.ProviderSupportsVision(llm.ProviderArk))
+}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import StatusBadge from './StatusBadge.vue'
-import type { SessionStatus } from '../types'
+import type { QuestionJudgementDTO, SessionStatus } from '../types'
 
 // DebugPanel 独立承载所有"调试相关"信息（session_id、原始status、已提取字段JSON、
 // 批次查询工具），以浮层抽屉形式展示，不嵌入主聊天/表单界面，避免技术细节干扰
@@ -10,10 +10,13 @@ export interface DebugSessionInfo {
   riskFactorType: string
   status: SessionStatus
   extractedInfo: Record<string, unknown> | null | undefined
+  missingQuestionKeys: string[]
+  questionJudgements: QuestionJudgementDTO[]
 }
 
 const props = defineProps<{
   open: boolean
+  stream: boolean
   batchId: string
   sessions: DebugSessionInfo[]
   queryBatchId: string
@@ -23,6 +26,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: []
+  'update:stream': [boolean]
   'update:queryBatchId': [string]
   query: []
 }>()
@@ -38,6 +42,19 @@ const emit = defineEmits<{
         </div>
 
         <div class="debug-body">
+          <div class="debug-block">
+            <div class="debug-label">请求选项</div>
+            <label class="debug-toggle">
+              <input
+                type="checkbox"
+                :checked="props.stream"
+                @change="emit('update:stream', ($event.target as HTMLInputElement).checked)"
+              />
+              使用 SSE 流式输出
+            </label>
+            <div class="debug-muted">修改后将在下一次提交回答时生效</div>
+          </div>
+
           <div class="debug-block">
             <div class="debug-label">批次 ID</div>
             <code v-if="props.batchId">{{ props.batchId }}</code>
@@ -58,6 +75,8 @@ const emit = defineEmits<{
                 class="debug-json"
               >{{ JSON.stringify(s.extractedInfo, null, 2) }}</pre>
               <div v-else class="debug-field debug-muted">尚未提取到信息</div>
+              <div v-if="s.missingQuestionKeys.length" class="debug-field">缺失问题：{{ s.missingQuestionKeys.join('、') }}</div>
+              <pre v-if="s.questionJudgements.length" class="debug-json">{{ JSON.stringify(s.questionJudgements, null, 2) }}</pre>
             </div>
           </div>
 
@@ -147,6 +166,17 @@ const emit = defineEmits<{
 .debug-muted {
   color: #bbb;
   font-size: 12.5px;
+}
+.debug-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #555;
+  font-size: 13px;
+  cursor: pointer;
+}
+.debug-toggle input {
+  margin: 0;
 }
 .debug-session {
   border: 1px dashed #e6e9f0;

@@ -24,7 +24,7 @@ func TestSessionAppService_SubmitInitial_CompleteAndReasonable_ReturnsCleared(t 
 		riskfactor.RiskFactorTypeIdentity, "请说明您的身份信息及职业背景", "我是财务经理，工作年限5年")
 
 	assert.Equal(t, riskfactor.StatusCleared, result.Status)
-	assert.Equal(t, riskfactor.ClosingMessage, result.Message)
+	assert.Equal(t, riskfactor.SessionCompletedMessage, result.Message)
 	require.NotNil(t, result.Cleared)
 	assert.True(t, *result.Cleared)
 	assert.Nil(t, result.Error)
@@ -75,7 +75,7 @@ func TestSessionAppService_SubmitFollowUp_CompletesAfterFollowUp(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, riskfactor.StatusCleared, result.Status)
-	assert.Equal(t, riskfactor.ClosingMessage, result.Message)
+	assert.Equal(t, riskfactor.SessionCompletedMessage, result.Message)
 }
 
 func TestSessionAppService_SubmitFollowUp_SessionNotFound(t *testing.T) {
@@ -96,6 +96,33 @@ func TestSessionAppService_SubmitFollowUp_OnClearedSession_ReturnsNotProcessingE
 	_, err := svc.SubmitFollowUp(context.Background(), "sess_5", "追问回答")
 
 	assert.ErrorIs(t, err, riskfactor.ErrSessionNotProcessing)
+}
+
+func TestSessionAppService_SubmitInitialQuestions_UsesCatalogAndPersistsStructuredAnswers(t *testing.T) {
+	judger := newFakeJudger()
+	repo := newFakeSessionRepository()
+	catalog := newFakeMainQuestionCatalog()
+	catalog.trees["identity"] = application.QuestionTree{RiskFactorType: "identity", Root: application.QuestionNode{
+		RiskFactorType: "identity", QuestionKey: "identity_main", QuestionText: "请提交身份信息", AnswerType: "group",
+		Children: []application.QuestionNode{{QuestionKey: "real_name", QuestionText: "姓名", AnswerType: "text", Required: true, MinSubmitCount: 1, Skills: []application.SkillSpec{{SkillKey: "name", RuleText: "必须是真实姓名"}}}},
+	}}
+	svc := application.NewSessionAppService(judger, repo)
+	svc.ConfigureQuestionSupport(catalog, newFakeAttachmentRepository(), t.TempDir(), 3)
+
+	result := svc.SubmitInitialQuestions(context.Background(), "sess_questions", "batch_1", "user_1", riskfactor.RiskFactorTypeIdentity, []application.QuestionAnswerInput{{QuestionKey: "real_name", Text: "张三"}})
+
+	assert.Equal(t, riskfactor.StatusCleared, result.Status)
+	require.Len(t, judger.inputs, 1)
+	assert.Equal(t, "请提交身份信息", judger.inputs[0].MainQuestion)
+	require.Len(t, judger.inputs[0].Questions, 1)
+	assert.Equal(t, []string{"必须是真实姓名"}, judger.inputs[0].Questions[0].Rules)
+	require.Len(t, judger.inputs[0].Answers, 1)
+	assert.Equal(t, "real_name", judger.inputs[0].Answers[0].QuestionKey)
+	saved, err := repo.FindByID(context.Background(), "sess_questions")
+	require.NoError(t, err)
+	require.Len(t, saved.History, 1)
+	require.Len(t, saved.History[0].Answers, 1)
+	assert.Equal(t, "text", saved.History[0].Answers[0].ValueType)
 }
 
 func TestSessionAppService_GetSession(t *testing.T) {

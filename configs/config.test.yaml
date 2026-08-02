@@ -13,7 +13,17 @@ mysql:
 
 llm:
   provider: mock
+  vision_provider: ""
   max_rounds: 3
+
+storage:
+  local_dir: "./data/test-uploads"
+  max_file_bytes: 1048576
+  max_files_per_question: 3
+  allowed_mime_types:
+    - "image/jpeg"
+    - "image/png"
+    - "image/webp"
 
 auth:
   api_key: "test-api-key"

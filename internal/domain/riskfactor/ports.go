@@ -2,17 +2,35 @@ package riskfactor
 
 import "context"
 
-// JudgeInput 是调用 RiskJudger 所需的完整上下文，避免端口方法签名随参数增多而不断膨胀。
+// QuestionSpec 是判断器所需的可回答问题及其全部审核规则。
+type QuestionSpec struct {
+	QuestionKey    string
+	QuestionText   string
+	AnswerType     string
+	Required       bool
+	MinSubmitCount int
+	Rules          []string
+}
+
+// QuestionAnswer 是单个问题的结构化文本或文件答案。
+type QuestionAnswer struct {
+	QuestionKey string
+	ValueType   string
+	Text        string
+	ImagePaths  []string
+	FileIDs     []string
+}
+
+// JudgeInput 是调用 RiskJudger 所需的完整上下文。
 type JudgeInput struct {
-	SessionID      string // 多路复用标识（流式场景下用于区分事件归属），同步调用可忽略
-	RiskFactorType RiskFactorType
-	MainQuestion   string   // 风险要素的主问题
-	History        []QAPair // 已完成的历史问答（不含本轮）
-	// CurrentQuestion 本轮用户实际正在回答的问题文本：
-	//   - 首轮（history 为空）时等于 MainQuestion；
-	//   - 追问轮次时等于上一轮判断产生的 follow_up_question（即 RiskFactorSession.FollowUpQuestion()）。
+	SessionID       string
+	RiskFactorType  RiskFactorType
+	MainQuestion    string
+	History         []QAPair
 	CurrentQuestion string
-	LatestAnswer    string // 用户对 CurrentQuestion 的回答
+	LatestAnswer    string
+	Questions       []QuestionSpec
+	Answers         []QuestionAnswer
 }
 
 // RiskJudger 领域端口：LLM 判断能力抽象。由 infra/llm 实现，domain/application 只依赖该接口。
@@ -38,7 +56,7 @@ type SessionRepository interface {
 type StreamEventType string
 
 const (
-	// StreamEventMessageDelta message（追问问题或收尾话术）的增量文本片段。
+	// StreamEventMessageDelta 需要补充资料时，追问文案的增量文本片段。
 	StreamEventMessageDelta StreamEventType = "message_delta"
 	// StreamEventResult 最终完整的结构化判断结果。
 	StreamEventResult StreamEventType = "result"

@@ -1,22 +1,51 @@
 package riskfactor
 
-// JudgementResult 单轮 LLM 判断结果值对象。
-type JudgementResult struct {
-	// Completeness 完整性：信息是否已全部覆盖，驱动追问循环是否继续。
-	Completeness bool
-	// Reasonableness 合理性：内容是否可信、无矛盾，参与终态结论合成。
-	Reasonableness bool
-	// FollowUpQuestion 针对完整性缺口生成的追问问题，仅 Completeness=false 时有效。
-	FollowUpQuestion string
-	// ExtractedInfo 本轮从回答中提取到的结构化信息（增量，尚未与历史合并）。
-	ExtractedInfo map[string]interface{}
-	// ReasoningSummary 判断依据摘要，供审计使用。
-	ReasoningSummary string
+// QuestionJudgement 是单个可回答问题的审核结果。
+type QuestionJudgement struct {
+	QuestionKey    string `json:"question_key"`
+	Required       bool   `json:"required"`
+	Completeness   bool   `json:"completeness"`
+	Reasonableness bool   `json:"reasonableness"`
+	Note           string `json:"note"`
 }
 
-// MergeInto 将本轮提取信息与历史累积信息合并，返回合并后的新 map。
-// 合并规则：同名字段以本轮（最新）取值为准；existing 中未被本轮覆盖的字段保留。
-// existing 为 nil 时视为空 map，不会 panic。
+// JudgementResult 是 LLM 对本轮回答的结构化判断结果。
+type JudgementResult struct {
+	Completeness     bool
+	Reasonableness   bool
+	Questions        []QuestionJudgement
+	MissingQuestions []string
+	ExtractedInfo    map[string]interface{}
+	ReasoningSummary string
+	FollowUpQuestion string
+}
+
+// AggregateJudgement 从逐问题结果计算风险要素级快照。模型漏掉必填问题时按不完整处理。
+func AggregateJudgement(specs []QuestionSpec, items []QuestionJudgement, extracted map[string]interface{}, reasoningSummary, followUpQuestion string) *JudgementResult {
+	byKey := make(map[string]QuestionJudgement, len(items))
+	for _, item := range items {
+		byKey[item.QuestionKey] = item
+	}
+	result := &JudgementResult{Completeness: true, Reasonableness: true, Questions: make([]QuestionJudgement, 0, len(specs)), ExtractedInfo: extracted, ReasoningSummary: reasoningSummary, FollowUpQuestion: followUpQuestion}
+	for _, spec := range specs {
+		item, ok := byKey[spec.QuestionKey]
+		if !ok {
+			item = QuestionJudgement{QuestionKey: spec.QuestionKey, Completeness: false, Reasonableness: true, Note: "模型未返回该问题的判断"}
+		}
+		item.Required = spec.Required
+		result.Questions = append(result.Questions, item)
+		if spec.Required && !item.Completeness {
+			result.Completeness = false
+			result.MissingQuestions = append(result.MissingQuestions, spec.QuestionKey)
+		}
+		if item.Completeness && !item.Reasonableness {
+			result.Reasonableness = false
+		}
+	}
+	return result
+}
+
+// MergeInto 将本轮提取信息合并到已有信息中，同名 key 以本轮值覆盖。
 func (j *JudgementResult) MergeInto(existing map[string]interface{}) map[string]interface{} {
 	merged := make(map[string]interface{}, len(existing)+len(j.ExtractedInfo))
 	for k, v := range existing {

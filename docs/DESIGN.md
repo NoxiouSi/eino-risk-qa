@@ -8,7 +8,37 @@
 
 面向风控/尽调场景：批量提交一个用户名下多个风险要素（如身份、资金来源），每个要素含主问题与用户回答；LLM 对每个要素分别判断回答的**完整性**（信息是否已全部覆盖）与**合理性**（内容是否可信、无矛盾）。若信息不完整，则针对缺失点生成追问，等待用户通过专门接口提交追问回答，每要素最多追问 3 次；一旦完整性满足即结束追问循环（不再因合理性问题继续追问），最终结合两个维度给出"是否排除合理怀疑"的结论、终止原因及提取到的结构化信息。项目升级为**全栈**：后端提供标准化的 HTTP 接口契约（含流式响应能力）、数据层设计；前端提供一个轻量对话页面，用于开发调试上述批量提交/追问问答全流程（非面向最终业务用户的正式产品界面）。
 
-**对用户可见的对话体验遵循统一收敛原则**：用户提交回答后，前端先展示"正在分析中……"；随后由后端产出**本轮唯一对外文案**（`message`）——若判断仍需追问，该文案即追问问题本身（真实逐字流式展示）；若已到达终态（无论是排除合理怀疑还是未排除），该文案统一为固定收尾话术"谢谢您的配合，审核结果将在3个工作日内推送给您"并结束对话。前端只需展示这一个 `message` 字段，**不再需要、也不应该**基于"是否存在追问问题"等内部字段自行分支判断展示内容——这一映射规则本身作为领域规则收敛在后端。
+**对用户可见的对话体验按会话与批次分层收敛**：用户提交回答后，前端先展示“正在分析中……”；单个风险要素仍需追问时，其`message`为缺失资料提示并支持真实逐字流式展示；单个风险要素终态仅返回“该项资料无需继续补充”，不得提前输出全局收尾文案。前端聚合本批次全部风险要素状态：存在`processing`或`llm_error`时提示用户补充资料或重试；只有预期的全部风险要素结果到齐且均已终止时，才统一显示“审核结果将在3个工作日内推送给您”。
+
+## 统一问题配置与证据审核
+
+风险要素表单采用“风险要素 → `group`主问题 → 可回答子问题 → 审核Skill”结构。`risk_factor_questions`统一保存主问题和子问题：主问题的`answer_type=group`且不直接回答，子问题以风险要素内唯一的`question_key`标识，支持`text/image/file`、必填、最少提交数、排序和启停。`identity`、`fund_source`、`transaction_scene`分别配置身份、资金来源和交易场景资料。
+
+`audit_skills`独立保存可运营审核规则，`question_skill_refs`支持问题与Skill多对多引用；LLM Prompt按引用顺序动态组合规则。Tool Calling返回`items[]`逐问题判断，领域层根据全部必填问题执行AND聚合，模型漏项按不完整处理，响应返回`missing_question_keys`和`question_judgements`。
+
+结构化答案独立写入`question_submissions`；图片二进制保存于`storage.local_dir`，`uploaded_files`仅保存受控相对路径、归属、MIME、大小及SHA-256。上传接口校验大小、MIME和图片内容，使用UUID文件名及受限权限。Eino v0.9.13通过`Message.UserInputMultiContent`与`MessageInputImage.Base64Data`传入真实图片；图片审核通过`llm.vision_provider: ark`分流到火山引擎 Ark OpenAI 兼容接口，使用豆包视觉模型，`ARK_API_KEY`仅从环境变量注入。
+
+### 数据关系
+
+```mermaid
+erDiagram
+    RISK_FACTOR_QUESTIONS ||--o{ RISK_FACTOR_QUESTIONS : parent_id
+    RISK_FACTOR_QUESTIONS ||--o{ QUESTION_SKILL_REFS : question_id
+    AUDIT_SKILLS ||--o{ QUESTION_SKILL_REFS : skill_id
+    RISK_FACTOR_SESSIONS ||--o{ QUESTION_SUBMISSIONS : session_id
+    UPLOADED_FILES ||--o{ QUESTION_SUBMISSIONS : file_id
+    RISK_FACTOR_SESSIONS ||--o{ QA_RECORDS : session_id
+```
+
+迁移`0003_unify_risk_factor_questions`通过`INSERT ... SELECT`把旧`risk_factor_main_questions`迁为`group`节点，写入三类风险要素的子问题与Skill seed，随后删除旧表以避免双写；Down迁移先恢复旧主问题表再移除新增结构。
+
+### 新版接口契约摘要
+
+- `GET /api/v1/users/{user_id}/main-questions`：每项返回`main_question`及`questions[]`（`question_key/question_text/answer_type/required/min_submit_count/sort_order`），不返回Skill规则。
+- `POST /api/v1/attachments`：`multipart/form-data`字段为`user_id/risk_factor_type/question_key/file`，返回`file_id/original_name/mime_type/size_bytes`。
+- `POST /api/v1/batches`：每个风险要素提交`answers: [{question_key,text? ,file_ids?}]`；文本与文件引用互斥。
+- `POST /api/v1/sessions/{session_id}/answers`：追问使用同一`answers`结构；前端仅提交`missing_question_keys`对应问题。
+- 会话响应新增`missing_question_keys`和`question_judgements`；同步与SSE最终`result`结构保持一致。
 
 ## 核心功能
 
@@ -27,7 +57,7 @@
 ## 技术栈
 
 - 语言：Go 1.21+
-- LLM框架：CloudWeGo `eino` + `eino-ext`（ChatModel Provider可插拔适配，已支持 `mock`（本地/CI固定规则模拟）、`openai`（兼容协议，含自建/代理网关）、`deepseek`（`eino-ext/components/model/deepseek`独立实现，非借用OpenAI兼容通道）三种provider，新增厂商仅需在`factory.go`增加一个分发分支）
+- LLM框架：CloudWeGo `eino` + `eino-ext`（ChatModel Provider可插拔适配，已支持 `mock`（本地/CI固定规则模拟）、`openai`（通用兼容协议）、`ark`（火山引擎 Ark OpenAI 兼容接口，负责图片审核）、`deepseek`（官方组件，负责文本审核））
 - Web框架：Hertz（CloudWeGo同生态，高性能、原生流式支持，errgroup并发调用友好）
 - ORM：GORM + golang-migrate（正式迁移脚本）
 - 数据库：MySQL 8.x
@@ -45,7 +75,7 @@
 - **domain（领域层）**：`internal/domain/riskfactor/`。不 import eino、不 import gorm。包含：
   - 聚合根 `RiskFactorSession`：封装状态机全部规则（转移条件、轮次校验、终态判定、提取信息合并、**对外展示文案`UserMessage()`推导**），是"核心领域知识"载体，提供领域方法驱动状态迁移，不对外暴露可绕过规则的字段直接赋值。
   - 值对象：`JudgementResult`（Completeness/Reasonableness/FollowUpQuestion/ExtractedInfo/ReasoningSummary）、`QAPair`、`RiskFactorType`、`SessionStatus`、`TerminationReason` 枚举。
-  - 领域常量：`ClosingMessage`（终态统一收尾话术，如"谢谢您的配合，审核结果将在3个工作日内推送给您"）。
+  - 领域常量：`SessionCompletedMessage`用于单风险要素终态，`BatchClosingMessage`仅用于全部风险要素完成后的批次收尾。
   - 端口（domain定义，infra实现）：`RiskJudger`（LLM判断能力抽象）、`SessionRepository`（持久化能力抽象）。
   - 领域事件（可选，供审计）：`SessionCleared`/`SessionNotCleared`/`FollowUpRequested`。
 - **application（应用层）**：`internal/application/`。仅编排：加载聚合→调用`RiskJudger`端口获取判断→调用聚合领域方法完成状态迁移→通过`SessionRepository`端口落库，事务边界在此层控制。不包含业务规则本身。含 `BatchAppService`（批量创建+errgroup并发调度首轮判断）、`SessionAppService`（首次提交/追问提交两个用例）。
@@ -67,10 +97,10 @@
   - completeness=true & reasonableness=false → NotCleared（cleared=false，reason=unreasonable）
   - completeness=false & round已达3 → NotCleared（cleared=false，reason=max_rounds_incomplete）
   - completeness=false & round<3 → 非终态，继续Processing，携带follow_up_question
-- **对外展示文案（`UserMessage()`）推导规则（domain聚合根内实现，是"结论合成"之上的又一条领域规则）**：
-  - `Status == Processing`（非终态） → `UserMessage()` 返回本轮 `follow_up_question` 原文
-  - `Status ∈ {Cleared, NotCleared}`（任意终态，无论`cleared`取值、无论`termination_reason`是什么） → `UserMessage()` 统一返回领域常量 `ClosingMessage`（"谢谢您的配合，审核结果将在3个工作日内推送给您"）
-  - 该方法是`RiskFactorSession`聚合根上的纯函数（不产生副作用），api/application层只读取其返回值用于响应，不重复实现该if/else；因此接口响应**不再需要单独暴露"是否存在追问问题"给调用方判断**——`message`字段本身已完全表达"该说什么"，`status`字段单独表达"对话是否已结束"（用于前端决定是否仍展示追问输入框），两者职责分离、互不替代。
+- **对外展示文案分层规则**：
+  - `Status == Processing`（非终态） → `UserMessage()`返回本轮`follow_up_question`，提示具体需要补充的资料。
+  - `Status ∈ {Cleared, NotCleared}` → 单会话`UserMessage()`返回`SessionCompletedMessage`（“该项资料无需继续补充”），只表示该风险要素退出追问。
+  - 批次收尾由前端聚合预期风险要素数量和全部会话状态；仅当结果全部到齐且没有`processing/llm_error`时显示`BatchSessionCompletedMessage`语义（“审核结果将在3个工作日内推送给您”）。SSE终态单会话不发送收尾`message_delta`。
 
 ## 状态机设计（domain层聚合根RiskFactorSession内实现，非分散在application/api）
 
@@ -91,10 +121,10 @@ stateDiagram-v2
     Cleared --> [*]
 
     state NotCleared_Unreasonable {
-      note: cleared=false, reason=unreasonable, UserMessage()=ClosingMessage
+      note: cleared=false, reason=unreasonable, UserMessage()=SessionCompletedMessage
     }
     state NotCleared_MaxRounds {
-      note: cleared=false, reason=max_rounds_incomplete, UserMessage()=ClosingMessage
+      note: cleared=false, reason=max_rounds_incomplete, UserMessage()=SessionCompletedMessage
     }
 ```
 
@@ -197,14 +227,11 @@ event: done
 data: {"session_id":"sess_abc123"}
 ```
 
-示例（终态，收尾话术一次性给出）：
+示例（单会话终态，不发送`message_delta`）：
 
 ```
-event: message_delta
-data: {"session_id":"sess_def456","content":"谢谢您的配合，审核结果将在3个工作日内推送给您。"}
-
 event: result
-data: {"session_id":"sess_def456","status":"cleared","current_round":0,"message":"谢谢您的配合，审核结果将在3个工作日内推送给您。","cleared":true,"termination_reason":null,"extracted_info":{"source":"工资收入"}}
+data: {"session_id":"sess_def456","status":"cleared","current_round":0,"message":"该项资料无需继续补充。","cleared":true,"termination_reason":null,"extracted_info":{"source":"工资收入"}}
 
 event: done
 data: {"session_id":"sess_def456"}
@@ -336,7 +363,7 @@ graph TB
       "risk_factor_type": "fund_source",
       "status": "cleared",
       "current_round": 0,
-      "message": "谢谢您的配合，审核结果将在3个工作日内推送给您。",
+      "message": "该项资料无需继续补充。",
       "cleared": true,
       "termination_reason": null,
       "extracted_info": {"source": "工资收入"},
@@ -363,11 +390,8 @@ data: {"session_id":"sess_abc123","risk_factor_type":"identity","status":"proces
 event: done
 data: {"session_id":"sess_abc123"}
 
-event: message_delta
-data: {"session_id":"sess_def456","content":"谢谢您的配合，审核结果将在3个工作日内推送给您。"}
-
 event: result
-data: {"session_id":"sess_def456","risk_factor_type":"fund_source","status":"cleared","current_round":0,"message":"谢谢您的配合，审核结果将在3个工作日内推送给您。","cleared":true,"termination_reason":null,"extracted_info":{"source":"工资收入"}}
+data: {"session_id":"sess_def456","risk_factor_type":"fund_source","status":"cleared","current_round":0,"message":"该项资料无需继续补充。","cleared":true,"termination_reason":null,"extracted_info":{"source":"工资收入"}}
 
 event: done
 data: {"session_id":"sess_def456"}
@@ -392,7 +416,7 @@ data: {"session_id":"sess_def456"}
   "session_id": "sess_abc123",
   "status": "cleared",
   "current_round": 1,
-  "message": "谢谢您的配合，审核结果将在3个工作日内推送给您。",
+  "message": "该项资料无需继续补充。",
   "cleared": true,
   "termination_reason": null,
   "extracted_info": {"occupation": "财务经理", "tenure": "2020年至今"},
@@ -410,7 +434,7 @@ event: message_delta
 data: {"session_id":"sess_abc123","content":"审核结果将在3个工作日内推送给您。"}
 
 event: result
-data: {"session_id":"sess_abc123","status":"cleared","current_round":1,"message":"谢谢您的配合，审核结果将在3个工作日内推送给您。","cleared":true,"termination_reason":null,"extracted_info":{"occupation":"财务经理","tenure":"2020年至今"}}
+data: {"session_id":"sess_abc123","status":"cleared","current_round":1,"message":"该项资料无需继续补充。","cleared":true,"termination_reason":null,"extracted_info":{"occupation":"财务经理","tenure":"2020年至今"}}
 
 event: done
 data: {"session_id":"sess_abc123"}
@@ -434,7 +458,7 @@ data: {"session_id":"sess_abc123"}
       "status": "cleared",
       "current_round": 1,
       "max_rounds": 3,
-      "message": "谢谢您的配合，审核结果将在3个工作日内推送给您。",
+      "message": "该项资料无需继续补充。",
       "cleared": true,
       "termination_reason": null,
       "extracted_info": {"occupation": "财务经理", "tenure": "2020年至今"},
@@ -721,7 +745,7 @@ eino-risk-qa/
 │   │       ├── session.go                   # 聚合根RiskFactorSession：状态机全部规则(SubmitInitialAnswer/SubmitFollowUpAnswer方法)，round校验，终态判定与结论合成(Cleared/NotCleared+reason)，UserMessage()对外展示文案推导
 │   │       ├── judgement.go                 # 值对象JudgementResult(Completeness/Reasonableness/FollowUpQuestion/ExtractedInfo/ReasoningSummary)及ExtractedInfo跨轮次合并方法MergeInto
 │   │       ├── qa_pair.go                   # 值对象QAPair(问题/回答/所属轮次/completeness/reasonableness判断快照)
-│   │       ├── types.go                     # SessionStatus、TerminationReason、RiskFactorType枚举定义、ClosingMessage领域常量
+│   │       ├── types.go                     # SessionStatus、TerminationReason、RiskFactorType枚举定义、SessionCompletedMessage领域常量
 │   │       ├── events.go                    # 领域事件定义(SessionCleared/SessionNotCleared/FollowUpRequested)，用于审计扩展
 │   │       └── ports.go                     # 端口接口定义：RiskJudger(Judge/JudgeStream方法)、SessionRepository(Save/FindByID/事务方法)，JudgeStreamEvent事件类型，domain层核心抽象，infra实现，application依赖注入使用
 │   ├── application/
@@ -730,11 +754,11 @@ eino-risk-qa/
 │   │   └── user_app_service.go              # UserAppService.GetMainQuestions（实现阶段新增）：按user_id查FindUser拿RiskFactorTypes→按类型批量查MainQuestionCatalog→按用户配置顺序组装返回，用户不存在返回ErrUserNotFound
 │   ├── infra/
 │   │   ├── llm/
-│   │   │   ├── factory.go                   # ChatModel工厂：按config.Provider(mock/openai/deepseek)分发eino-ext组件，返回ToolCallingChatModel接口
+│   │   │   ├── factory.go                   # ChatModel工厂：按config.Provider(mock/openai/ark/deepseek)分发eino-ext组件，返回ToolCallingChatModel接口
 │   │   │   ├── prompt.go                    # Prompt/ChatTemplate构建：系统提示词、风险要素类型、历史问答拼装、完整性/合理性判断指引；Tool Schema字段顺序约定follow_up_question为最后一个字段
 │   │   │   ├── schema.go                    # 结构化输出Tool Schema定义(completeness/reasonableness/extracted_info/reasoning_summary/follow_up_question)
 │   │   │   ├── judger_adapter.go            # JudgerAdapter实现domain.RiskJudger端口：组合factory+prompt+schema，含重试与解析失败处理
-│   │   │   └── stream_adapter.go            # JudgerAdapter的JudgeStream实现：基于eino ChatModel.Stream()获取工具调用参数的增量字符串，内置增量JSON扫描器提取follow_up_question字段的部分值并转发为message_delta事件；终态时一次性发出完整ClosingMessage
+│   │   │   └── stream_adapter.go            # JudgeStream解析follow_up_question增量并转发message_delta；单会话终态只发result，不发送批次收尾增量
 │   │   └── persistence/
 │   │       ├── models.go                    # GORM实体：UserModel(实现阶段新增RiskFactorTypes列)/BatchModel/RiskFactorSessionModel(含completeness/reasonableness快照、reason、round、version乐观锁字段)/QARecordModel/RiskFactorMainQuestionModel(实现阶段新增)
 │   │       ├── session_repository.go        # GORMSessionRepository实现domain.SessionRepository：Save(事务内同时写session状态与QA记录)、FindByID，乐观锁条件更新
@@ -817,8 +841,9 @@ func (j *JudgementResult) MergeInto(existing map[string]interface{}) map[string]
 ```
 
 ```go
-// internal/domain/riskfactor/types.go — 领域常量：终态统一收尾话术
-const ClosingMessage = "谢谢您的配合，审核结果将在3个工作日内推送给您。"
+// internal/domain/riskfactor/types.go — 区分单风险要素结束与整个批次结束
+const SessionCompletedMessage = "该项资料无需继续补充。"
+const BatchClosingMessage = "审核结果将在3个工作日内推送给您。"
 ```
 
 ```go
@@ -840,8 +865,8 @@ func (s *RiskFactorSession) SubmitInitialAnswer(answer string, judgement *Judgem
 // SubmitFollowUpAnswer 追问回答提交，仅Processing状态允许调用，内部执行完整性驱动的追问循环与结论合成规则
 func (s *RiskFactorSession) SubmitFollowUpAnswer(answer string, judgement *JudgementResult) error
 
-// UserMessage 对外展示文案推导（核心领域规则，api/application层直接读取其返回值，不重复实现分支逻辑）：
-// Status==Processing时返回最新一轮的follow_up_question；到达任意终态(Cleared/NotCleared)时统一返回领域常量ClosingMessage
+// UserMessage 推导单风险要素文案：Processing返回追问，终态返回SessionCompletedMessage。
+// BatchSessionCompletedMessage只能由整个批次的聚合状态决定。
 func (s *RiskFactorSession) UserMessage() string
 
 // Version 只读访问乐观锁版本号（实现阶段补充）：由 infra/persistence 层在 FindByID 还原聚合时赋值，
@@ -853,11 +878,13 @@ func (s *RiskFactorSession) Version() int
 
 前置条件：本机 MySQL 已按 `docs/MYSQL_SETUP.md` 完成安装与 `eino_risk_qa` 库/账号初始化；Go 1.21+；Node.js 18+。
 
-**启动后端**（默认使用 `mock` LLM provider，无需真实 API Key，即可完整跑通判断逻辑）：
+**启动后端**（当前配置使用 DeepSeek 处理文本、火山引擎 Ark 处理图片）：
 
 ```bash
+export EINO_RISK_QA_LLM_DEEPSEEK_API_KEY="sk-xxxxxxxx"
+export ARK_API_KEY="your-ark-api-key"
 go build -o /tmp/eino-risk-qa-server ./cmd/server
-./tmp/eino-risk-qa-server -config configs/config.yaml   # 默认监听 :8080
+/tmp/eino-risk-qa-server -config configs/config.yaml   # 默认监听 :8080
 ```
 
 **启动前端调试页面**：
@@ -870,11 +897,14 @@ npm run dev        # 默认监听 :5173，已通过 vite.config.ts 将 /api/* �
 
 浏览器打开 `http://localhost:5173/` 即可使用：填写用户ID后点击"开始"自动拉取主问题，在问答表单中填完全部回答后统一点击"提交回答"；勾选"流式输出"可体验 SSE 逐字追问；若仍有会话处于"处理中"，追问问题会重新聚合进底部统一表单，填完后再次点击"提交回答"即可并发提交（不支持逐条单独提交）；点击右上角"调试信息"按钮可在独立抽屉中查看`session_id`/原始状态/已提取字段，以及粘贴`batch_id`恢复调试上下文的"批次查询"工具。
 
-若要切换为真实 LLM：
-- OpenAI 兼容协议：修改 `configs/config.yaml` 中 `llm.provider: openai` 并填写 `llm.openai.*` 下的 `api_key`/`base_url`/`model`。
-- DeepSeek 官方 API（实现阶段新增）：修改 `llm.provider: deepseek`，`model` 默认已配置为 `deepseek-chat`（可改为 `deepseek-reasoner`）；**API Key 不写入配置文件**，通过环境变量注入后启动进程即可：
+真实 LLM 配置：
+- 文本审核使用 DeepSeek：`llm.provider: deepseek`，密钥通过 `EINO_RISK_QA_LLM_DEEPSEEK_API_KEY` 注入。
+- 图片审核使用火山引擎 Ark：`llm.vision_provider: ark`，地址为 `https://ark.cn-beijing.volces.com/api/v3`，模型为 `doubao-seed-2-1-turbo-260628`，密钥仅通过 `ARK_API_KEY` 注入。
+- Ark 使用 OpenAI 兼容 Chat Completions 协议接入 Eino，上传的本地图片以 Base64 多模态内容发送，无需新增 SDK 或把图片暴露为公网 URL。
+- `llm.request_timeout_seconds`控制单个风险要素的模型判断总时长，默认300秒；同步与SSE均受此限制，避免一个外部模型调用无限阻塞整个批次。前端会实时显示模型分析等待秒数，并在后端截止时间之后执行客户端兜底超时。
 
   ```bash
   export EINO_RISK_QA_LLM_DEEPSEEK_API_KEY="sk-xxxxxxxx"
-  ./eino-risk-qa-server -config configs/config.yaml
+  export ARK_API_KEY="your-ark-api-key"
+  /tmp/eino-risk-qa-server -config configs/config.yaml
   ```

@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 
 	"github.com/cloudwego/eino/components/model"
@@ -105,9 +106,17 @@ func (m *MockChatModel) Stream(ctx context.Context, input []*schema.Message, opt
 
 // judgementArgs 是 mock 决策结果的 JSON 结构，字段顺序与 schema.go 中的约定保持一致
 // （follow_up_question 放最后，便于验证增量扫描器）。
+type itemJudgementArgs struct {
+	QuestionKey    string `json:"question_key"`
+	Completeness   bool   `json:"completeness"`
+	Reasonableness bool   `json:"reasonableness"`
+	Note           string `json:"note"`
+}
+
 type judgementArgs struct {
-	Completeness     bool                   `json:"completeness"`
-	Reasonableness   bool                   `json:"reasonableness"`
+	Items            []itemJudgementArgs    `json:"items,omitempty"`
+	Completeness     bool                   `json:"completeness,omitempty"`
+	Reasonableness   bool                   `json:"reasonableness,omitempty"`
 	ExtractedInfo    map[string]interface{} `json:"extracted_info"`
 	ReasoningSummary string                 `json:"reasoning_summary"`
 	FollowUpQuestion string                 `json:"follow_up_question"`
@@ -133,6 +142,9 @@ func (m *MockChatModel) decide(input []*schema.Message) judgementArgs {
 		ExtractedInfo:    map[string]interface{}{"raw_answer_length": len([]rune(answer))},
 		ReasoningSummary: "mock provider: 基于回答长度与关键词的固定规则判断",
 	}
+	for _, key := range extractQuestionKeys(input) {
+		args.Items = append(args.Items, itemJudgementArgs{QuestionKey: key, Completeness: completeness, Reasonableness: reasonableness, Note: "mock provider固定规则判断"})
+	}
 	if !completeness {
 		args.FollowUpQuestion = "请提供更详细的信息以便完成核实。"
 	}
@@ -145,13 +157,43 @@ func extractLatestAnswer(input []*schema.Message) string {
 	for _, msg := range input {
 		if msg.Role == schema.User {
 			userContent = msg.Content
+			for _, part := range msg.UserInputMultiContent {
+				if part.Type == schema.ChatMessagePartTypeText {
+					userContent += part.Text
+				}
+			}
 		}
 	}
-	idx := strings.LastIndex(userContent, "回答：")
+	marker := "回答："
+	idx := strings.LastIndex(userContent, marker)
+	if idx == -1 {
+		marker = "回答摘要："
+		idx = strings.LastIndex(userContent, marker)
+	}
 	if idx == -1 {
 		return ""
 	}
-	rest := userContent[idx+len("回答："):]
+	rest := userContent[idx+len(marker):]
+
 	rest = strings.TrimRight(rest, "\n")
 	return rest
+}
+
+var questionKeyPattern = regexp.MustCompile(`\[([a-z0-9_]+)\]`)
+
+func extractQuestionKeys(input []*schema.Message) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, msg := range input {
+		if msg.Role != schema.System {
+			continue
+		}
+		for _, match := range questionKeyPattern.FindAllStringSubmatch(msg.Content, -1) {
+			if len(match) == 2 && !seen[match[1]] {
+				seen[match[1]] = true
+				result = append(result, match[1])
+			}
+		}
+	}
+	return result
 }

@@ -59,7 +59,7 @@ func TestBatchHandler_SubmitBatch_NonStream_Success(t *testing.T) {
 	assert.NotEmpty(t, out.BatchID)
 	require.Len(t, out.Results, 1)
 	assert.Equal(t, "cleared", out.Results[0].Status)
-	assert.Equal(t, "谢谢您的配合，审核结果将在3个工作日内推送给您。", out.Results[0].Message)
+	assert.Equal(t, riskfactor.SessionCompletedMessage, out.Results[0].Message)
 }
 
 func TestBatchHandler_SubmitBatch_MissingUserID_ReturnsInvalidParam(t *testing.T) {
@@ -155,4 +155,13 @@ func assertHasEventType(t *testing.T, events []sseEvent, eventType string) {
 		}
 	}
 	t.Fatalf("expected an SSE event of type %q, got events: %+v", eventType, events)
+}
+
+func assertNotHasEventType(t *testing.T, events []sseEvent, eventType string) {
+	t.Helper()
+	for _, e := range events {
+		if e.Event == eventType {
+			t.Fatalf("unexpected SSE event of type %q, got events: %+v", eventType, events)
+		}
+	}
 }

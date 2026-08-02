@@ -15,31 +15,47 @@ import (
 // ArgumentScanner 提取 follow_up_question 字段的部分值并转发为 message_delta 事件；
 // 流结束后累积拼接完整参数，反序列化得到最终 JudgementResult 并发出 Result 事件。
 //
-// 若判断结果为终态（completeness=true），follow_up_question 为空，不会产生任何真正的增量事件；
-// 此时在拿到完整结果后，一次性发出一个 message_delta 事件，内容为领域常量 ClosingMessage
-// （因为该文案是常量、无需也不必要模拟逐字过程）。
+// 若单个风险要素到达终态（completeness=true），follow_up_question 为空，不发送 message_delta；
+// 批次收尾必须等待全部风险要素结束后由聚合状态统一决定。
 func (a *JudgerAdapter) JudgeStream(ctx context.Context, input riskfactor.JudgeInput) (<-chan riskfactor.JudgeStreamEvent, error) {
 	log := logging.FromContext(ctx).With("session_id", input.SessionID)
-	toolModel, err := a.chatModel.WithTools([]*schema.ToolInfo{judgementToolInfo()})
+	chatModel, err := a.modelFor(input)
+	if err != nil {
+		log.Error("judge stream: select chat model failed", "error", err.Error())
+		return nil, err
+	}
+	toolModel, err := chatModel.WithTools([]*schema.ToolInfo{judgementToolInfo()})
 	if err != nil {
 		log.Error("judge stream: bind tools failed", "error", err.Error())
 		return nil, err
 	}
-	messages := BuildMessages(input)
-
-	sr, err := toolModel.Stream(ctx, messages)
+	messages, err := BuildMessages(input)
 	if err != nil {
+		log.Error("judge stream: build messages failed", "error", err.Error())
+		return nil, err
+	}
+
+	requestCtx, cancel := context.WithTimeout(ctx, a.requestTimeout)
+	sr, err := toolModel.Stream(requestCtx, messages)
+	if err != nil {
+		cancel()
+		if errors.Is(requestCtx.Err(), context.DeadlineExceeded) {
+			log.Error("judge stream: chat model request timed out", "timeout", a.requestTimeout.String())
+			return nil, ErrRequestTimeout
+		}
 		log.Error("judge stream: chat model stream failed", "error", err.Error())
 		return nil, err
 	}
 
 	events := make(chan riskfactor.JudgeStreamEvent, 16)
-	go a.consumeStream(ctx, sr, input.SessionID, events)
+	go a.consumeStream(requestCtx, cancel, sr, input, events)
 	return events, nil
 }
 
-func (a *JudgerAdapter) consumeStream(ctx context.Context, sr *schema.StreamReader[*schema.Message], sessionID string, events chan riskfactor.JudgeStreamEvent) {
+func (a *JudgerAdapter) consumeStream(ctx context.Context, cancel context.CancelFunc, sr *schema.StreamReader[*schema.Message], input riskfactor.JudgeInput, events chan riskfactor.JudgeStreamEvent) {
+	sessionID := input.SessionID
 	log := logging.FromContext(ctx).With("session_id", sessionID)
+	defer cancel()
 	defer close(events)
 	defer sr.Close()
 
@@ -52,7 +68,12 @@ func (a *JudgerAdapter) consumeStream(ctx context.Context, sr *schema.StreamRead
 			break
 		}
 		if err != nil {
-			log.Error("judge stream: recv chunk failed", "error", err.Error())
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				err = ErrRequestTimeout
+				log.Error("judge stream: receive timed out", "timeout", a.requestTimeout.String())
+			} else {
+				log.Error("judge stream: recv chunk failed", "error", err.Error())
+			}
 			events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, Type: riskfactor.StreamEventError, Err: err}
 			return
 		}
@@ -73,19 +94,13 @@ func (a *JudgerAdapter) consumeStream(ctx context.Context, sr *schema.StreamRead
 			{Function: schema.FunctionCall{Name: judgementToolName, Arguments: scanner.FullArguments()}},
 		},
 	}
-	result, err := parseJudgementFromMessage(msg)
+	result, err := parseJudgementForInput(msg, input)
 	if err != nil {
 		log.Error("judge stream: parse final result failed", "error", err.Error())
 		events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, Type: riskfactor.StreamEventError, Err: err}
 		return
 	}
 	log.Info("judge stream: succeeded", "completeness", result.Completeness, "reasonableness", result.Reasonableness)
-
-	// completeness=true（终态）时 follow_up_question 为空，不会有增量事件产生，
-	// 此处一次性发出完整的收尾话术，供前端直接渲染（规则详见 docs/DESIGN.md 流式输出设计）。
-	if result.Completeness {
-		events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, Type: riskfactor.StreamEventMessageDelta, MessageDelta: riskfactor.ClosingMessage}
-	}
 
 	events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, Type: riskfactor.StreamEventResult, Result: result}
 }

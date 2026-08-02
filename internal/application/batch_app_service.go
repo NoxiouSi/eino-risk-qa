@@ -54,7 +54,11 @@ func (b *BatchAppService) SubmitBatch(ctx context.Context, input SubmitBatchInpu
 	for i, rf := range input.RiskFactors {
 		sessionID := b.ids.NewSessionID()
 		g.Go(func() error {
-			results[i] = b.sessionSvc.SubmitInitial(gctx, sessionID, batchID, input.UserID, rf.RiskFactorType, rf.MainQuestion, rf.Answer)
+			if len(rf.Answers) > 0 {
+				results[i] = b.sessionSvc.SubmitInitialQuestions(gctx, sessionID, batchID, input.UserID, rf.RiskFactorType, rf.Answers)
+			} else {
+				results[i] = b.sessionSvc.SubmitInitial(gctx, sessionID, batchID, input.UserID, rf.RiskFactorType, rf.MainQuestion, rf.Answer)
+			}
 			return nil // 单要素失败已封装进 SessionResult.Error，不通过 error 中断整批
 		})
 	}
@@ -63,7 +67,7 @@ func (b *BatchAppService) SubmitBatch(ctx context.Context, input SubmitBatchInpu
 	_ = g.Wait()
 	log.Info("submit batch: all risk factors processed")
 
-	return BatchResult{BatchID: batchID, CreatedAt: createdAt, Results: results}, nil
+	return BatchResult{BatchID: batchID, UserID: input.UserID, UserName: input.UserName, CreatedAt: createdAt, Results: results}, nil
 }
 
 // SubmitBatchStream 批量首轮提交的流式变体：并发对每个风险要素调用 SessionAppService.SubmitInitialStream，
@@ -92,6 +96,10 @@ func (b *BatchAppService) SubmitBatchStream(ctx context.Context, input SubmitBat
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if len(rf.Answers) > 0 {
+				b.sessionSvc.SubmitInitialQuestionsStream(ctx, sessionID, batchID, input.UserID, rf.RiskFactorType, rf.Answers, emitter)
+				return
+			}
 			b.sessionSvc.SubmitInitialStream(ctx, sessionID, batchID, input.UserID, rf.RiskFactorType, rf.MainQuestion, rf.Answer, emitter)
 		}()
 	}
@@ -108,6 +116,12 @@ func (b *BatchAppService) GetBatch(ctx context.Context, batchID string) (BatchRe
 		return BatchResult{}, err
 	}
 
+	user, err := b.repo.FindUser(ctx, batch.UserID)
+	if err != nil {
+		log.Error("get batch: find batch user failed", "user_id", batch.UserID, "error", err.Error())
+		return BatchResult{}, err
+	}
+
 	sessions, err := b.sessionRepository().FindByBatchID(ctx, batchID)
 	if err != nil {
 		log.Error("get batch: find sessions by batch_id failed", "error", err.Error())
@@ -115,17 +129,83 @@ func (b *BatchAppService) GetBatch(ctx context.Context, batchID string) (BatchRe
 	}
 	log.Info("get batch: found sessions", "session_count", len(sessions))
 
-	results := make([]SessionResult, 0, len(sessions))
-	for _, s := range sessions {
-		results = append(results, toSessionResultFromSession(s))
+	trees, err := b.findQuestionTreesForSessions(ctx, sessions)
+	if err != nil {
+		log.Error("get batch: find question trees failed", "error", err.Error())
+		return BatchResult{}, err
 	}
-	return BatchResult{BatchID: batchID, CreatedAt: batch.CreatedAt, Results: results}, nil
+
+	results := make([]SessionResult, 0, len(sessions))
+	for _, session := range sessions {
+		result := toSessionResultFromSession(session)
+		if tree, ok := trees[string(session.RiskFactorType)]; ok {
+			result.Questions = publicQuestionNodes(tree.Root.Children)
+			result.QuestionJudgements = normalizeQuestionJudgements(result.Questions, result.QuestionJudgements)
+			result.MissingQuestionKeys = missingQuestionKeys(result.Questions, result.QuestionJudgements)
+		}
+		results = append(results, result)
+	}
+	return BatchResult{BatchID: batchID, UserID: batch.UserID, UserName: user.Name, CreatedAt: batch.CreatedAt, Results: results}, nil
 }
 
 // sessionRepository 从内部持有的 SessionAppService 中取出其 repo，避免 BatchAppService
 // 再重复持有一份 riskfactor.SessionRepository 依赖。
 func (b *BatchAppService) sessionRepository() riskfactor.SessionRepository {
 	return b.sessionSvc.repo
+}
+
+func (b *BatchAppService) findQuestionTreesForSessions(ctx context.Context, sessions []*riskfactor.RiskFactorSession) (map[string]QuestionTree, error) {
+	if b.sessionSvc.catalog == nil {
+		return map[string]QuestionTree{}, nil
+	}
+	types := make([]string, 0, len(sessions))
+	seen := make(map[string]struct{}, len(sessions))
+	for _, session := range sessions {
+		riskType := string(session.RiskFactorType)
+		if _, exists := seen[riskType]; exists {
+			continue
+		}
+		seen[riskType] = struct{}{}
+		types = append(types, riskType)
+	}
+	return b.sessionSvc.catalog.FindQuestionTrees(ctx, types)
+}
+
+func publicQuestionNodes(questions []QuestionNode) []QuestionNode {
+	result := make([]QuestionNode, len(questions))
+	copy(result, questions)
+	for i := range result {
+		result[i].Skills = nil
+		result[i].Children = nil
+	}
+	return result
+}
+
+func normalizeQuestionJudgements(questions []QuestionNode, judgements []riskfactor.QuestionJudgement) []riskfactor.QuestionJudgement {
+	requiredByKey := make(map[string]bool, len(questions))
+	for _, question := range questions {
+		requiredByKey[question.QuestionKey] = question.Required
+	}
+	result := append([]riskfactor.QuestionJudgement(nil), judgements...)
+	for i := range result {
+		result[i].Required = requiredByKey[result[i].QuestionKey]
+	}
+	return result
+}
+
+func missingQuestionKeys(questions []QuestionNode, judgements []riskfactor.QuestionJudgement) []string {
+	byKey := make(map[string]riskfactor.QuestionJudgement, len(judgements))
+	for _, judgement := range judgements {
+		byKey[judgement.QuestionKey] = judgement
+	}
+	missing := make([]string, 0)
+	for _, question := range questions {
+		judgement, exists := byKey[question.QuestionKey]
+		if question.Required && (!exists || !judgement.Completeness) {
+			missing = append(missing, question.QuestionKey)
+		}
+	}
+	return missing
 }
 
 func toSessionResultFromSession(s *riskfactor.RiskFactorSession) SessionResult {

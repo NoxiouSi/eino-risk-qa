@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/cloudwego/eino-ext/components/model/deepseek"
 	"github.com/cloudwego/eino-ext/components/model/openai"
@@ -19,23 +20,42 @@ const (
 	ProviderMock Provider = "mock"
 	// ProviderOpenAI OpenAI 兼容协议（含自建/代理网关，只要遵循 Chat Completions 协议）。
 	ProviderOpenAI Provider = "openai"
+	// ProviderArk 火山引擎 Ark OpenAI 兼容接口，用于豆包视觉模型。
+	ProviderArk Provider = "ark"
 	// ProviderDeepSeek DeepSeek 官方 API（基于 eino-ext/components/model/deepseek，
 	// 独立实现 ToolCallingChatModel 接口，而非借用 OpenAI 兼容通道）。
 	ProviderDeepSeek Provider = "deepseek"
 )
 
-// ErrUnknownProvider 配置了未知的 provider。
-var ErrUnknownProvider = errors.New("llm: unknown provider")
+var (
+	// ErrUnknownProvider 配置了未知的 provider。
+	ErrUnknownProvider = errors.New("llm: unknown provider")
+	// ErrMissingAPIKey 表示所选远程 Provider 未注入 API Key。
+	ErrMissingAPIKey = errors.New("llm: api key is required")
+)
+
+// ProviderSupportsVision 返回当前适配器已确认的图片输入能力。
+func ProviderSupportsVision(provider Provider) bool {
+	return provider == ProviderOpenAI || provider == ProviderArk || provider == ProviderMock || provider == ""
+}
 
 // FactoryConfig ChatModel 工厂所需的配置（对应 configs/config.yaml 的 llm 节点）。
 type FactoryConfig struct {
 	Provider Provider
 	OpenAI   OpenAIConfig
+	Ark      ArkConfig
 	DeepSeek DeepSeekConfig
 }
 
 // OpenAIConfig OpenAI 兼容协议所需的配置。
 type OpenAIConfig struct {
+	APIKey  string
+	BaseURL string
+	Model   string
+}
+
+// ArkConfig 火山引擎 Ark OpenAI 兼容接口所需配置。
+type ArkConfig struct {
 	APIKey  string
 	BaseURL string
 	Model   string
@@ -57,16 +77,12 @@ func NewToolCallingChatModel(ctx context.Context, cfg FactoryConfig) (model.Tool
 	case ProviderMock, "":
 		return NewMockChatModel(), nil
 	case ProviderOpenAI:
-		cm, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
-			APIKey:  cfg.OpenAI.APIKey,
-			BaseURL: cfg.OpenAI.BaseURL,
-			Model:   cfg.OpenAI.Model,
-		})
-		if err != nil {
-			logging.L.Error("llm factory: construct openai chat model failed", "error", err.Error())
-			return nil, err
+		return newOpenAICompatibleChatModel(ctx, string(ProviderOpenAI), cfg.OpenAI.APIKey, cfg.OpenAI.BaseURL, cfg.OpenAI.Model)
+	case ProviderArk:
+		if strings.TrimSpace(cfg.Ark.APIKey) == "" {
+			return nil, ErrMissingAPIKey
 		}
-		return cm, nil
+		return newOpenAICompatibleChatModel(ctx, string(ProviderArk), cfg.Ark.APIKey, cfg.Ark.BaseURL, cfg.Ark.Model)
 	case ProviderDeepSeek:
 		cm, err := deepseek.NewChatModel(ctx, &deepseek.ChatModelConfig{
 			APIKey:  cfg.DeepSeek.APIKey,
@@ -82,4 +98,17 @@ func NewToolCallingChatModel(ctx context.Context, cfg FactoryConfig) (model.Tool
 		logging.L.Error("llm factory: unknown provider", "provider", string(cfg.Provider))
 		return nil, ErrUnknownProvider
 	}
+}
+
+func newOpenAICompatibleChatModel(ctx context.Context, provider, apiKey, baseURL, modelName string) (model.ToolCallingChatModel, error) {
+	cm, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
+		APIKey:  apiKey,
+		BaseURL: baseURL,
+		Model:   modelName,
+	})
+	if err != nil {
+		logging.L.Error("llm factory: construct openai-compatible chat model failed", "provider", provider, "model", modelName, "error", err.Error())
+		return nil, err
+	}
+	return cm, nil
 }

@@ -2,7 +2,6 @@
 const props = defineProps<{
   userId: string
   userName: string
-  stream: boolean
   loading: boolean
   started: boolean
 }>()
@@ -10,7 +9,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:userId': [string]
   'update:userName': [string]
-  'update:stream': [boolean]
   start: []
   reset: []
 }>()
@@ -46,17 +44,6 @@ const emit = defineEmits<{
       </div>
       <button class="btn-reset" type="button" @click="emit('reset')">更换用户</button>
     </template>
-
-    <!-- 流式开关在整个流程中（首轮提交与后续所有追问提交）始终生效，
-         不随 started 状态隐藏，保证用户随时可见并可切换。 -->
-    <label class="stream-toggle">
-      <input
-        type="checkbox"
-        :checked="props.stream"
-        @change="emit('update:stream', ($event.target as HTMLInputElement).checked)"
-      />
-      流式
-    </label>
   </div>
 </template>
 
@@ -85,15 +72,6 @@ const emit = defineEmits<{
 }
 .user-input-name {
   flex: 1;
-}
-.stream-toggle {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: #888;
-  white-space: nowrap;
-  cursor: pointer;
 }
 .btn-start {
   cursor: pointer;

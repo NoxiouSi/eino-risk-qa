@@ -12,11 +12,11 @@ import (
 // 不涉及状态机/事务，属于简单配置查询，因此不依赖 domain 层的聚合根或端口。
 type UserAppService struct {
 	userRepo UserBatchRepository
-	catalog  MainQuestionCatalog
+	catalog  RiskFactorQuestionCatalog
 }
 
 // NewUserAppService 创建应用服务实例。
-func NewUserAppService(userRepo UserBatchRepository, catalog MainQuestionCatalog) *UserAppService {
+func NewUserAppService(userRepo UserBatchRepository, catalog RiskFactorQuestionCatalog) *UserAppService {
 	return &UserAppService{userRepo: userRepo, catalog: catalog}
 }
 
@@ -33,20 +33,25 @@ func (s *UserAppService) GetMainQuestions(ctx context.Context, userID string) (M
 		return MainQuestionsResult{}, err
 	}
 
-	questions, err := s.catalog.FindMainQuestions(ctx, user.RiskFactorTypes)
+	trees, err := s.catalog.FindQuestionTrees(ctx, user.RiskFactorTypes)
 	if err != nil {
-		log.Error("get main questions: find main questions failed", "error", err.Error())
+		log.Error("get main questions: find question trees failed", "error", err.Error())
 		return MainQuestionsResult{}, err
 	}
 
 	items := make([]MainQuestionItem, 0, len(user.RiskFactorTypes))
 	for _, t := range user.RiskFactorTypes {
-		q, ok := questions[t]
+		tree, ok := trees[t]
 		if !ok {
-			log.Warn("get main questions: main question missing for risk factor type", "risk_factor_type", t)
+			log.Warn("get main questions: question tree missing for risk factor type", "risk_factor_type", t)
 			continue
 		}
-		items = append(items, MainQuestionItem{RiskFactorType: riskfactor.RiskFactorType(t), MainQuestion: q})
+		questions := make([]QuestionNode, len(tree.Root.Children))
+		copy(questions, tree.Root.Children)
+		for i := range questions {
+			questions[i].Skills = nil
+		}
+		items = append(items, MainQuestionItem{RiskFactorType: riskfactor.RiskFactorType(t), MainQuestion: tree.Root.QuestionText, Questions: questions})
 	}
 
 	log.Info("get main questions: succeeded", "item_count", len(items))

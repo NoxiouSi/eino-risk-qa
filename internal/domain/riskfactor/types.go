@@ -4,8 +4,9 @@ package riskfactor
 type RiskFactorType string
 
 const (
-	RiskFactorTypeIdentity   RiskFactorType = "identity"
-	RiskFactorTypeFundSource RiskFactorType = "fund_source"
+	RiskFactorTypeIdentity         RiskFactorType = "identity"
+	RiskFactorTypeFundSource       RiskFactorType = "fund_source"
+	RiskFactorTypeTransactionScene RiskFactorType = "transaction_scene"
 )
 
 // SessionStatus 会话状态机的状态集合。
@@ -35,5 +36,9 @@ const (
 // DefaultMaxRounds 默认最大追问轮次。
 const DefaultMaxRounds = 3
 
-// ClosingMessage 到达任意终态后统一对外展示的收尾话术（领域常量）。
-const ClosingMessage = "谢谢您的配合，审核结果将在3个工作日内推送给您。"
+const (
+	// SessionCompletedMessage 表示单个风险要素无需继续补充资料，不代表整个批次完成。
+	SessionCompletedMessage = "该项资料无需继续补充。"
+	// BatchClosingMessage 仅在批次内全部风险要素结束后展示。
+	BatchClosingMessage = "审核结果将在3个工作日内推送给您。"
+)

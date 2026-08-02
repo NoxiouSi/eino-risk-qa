@@ -9,5 +9,7 @@ type QAPair struct {
 	Answer         string
 	Completeness   bool
 	Reasonableness bool
+	Judgements     []QuestionJudgement
+	Answers        []QuestionAnswer
 	CreatedAt      time.Time
 }

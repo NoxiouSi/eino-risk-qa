@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { reactive, ref, computed } from 'vue'
+import { reactive, ref, computed, onUnmounted } from 'vue'
 import RiskFactorForm from './components/RiskFactorForm.vue'
 import QAFormCard from './components/QAFormCard.vue'
 import SessionCard from './components/SessionCard.vue'
 import DebugPanel from './components/DebugPanel.vue'
 import { getBatch, getMainQuestions, submitBatch, submitBatchStream, submitFollowUp, submitFollowUpStream } from './api/client'
-import type { ChatBubble, MainQuestionItem, SessionResultDTO, SSEEvent } from './types'
+import type { ChatBubble, MainQuestionItem, QuestionAnswerDTO, QuestionDraft, QuestionDraftMap, QuestionItem, QuestionJudgementDTO, SessionDetailDTO, SessionResultDTO, SSEEvent } from './types'
 
 interface SessionCardState {
   sessionId: string
@@ -25,9 +25,12 @@ interface SessionCardState {
   generating: boolean
   // 最近一次提交失败的错误提示，内联展示在对应表单卡片下方，不进入bubbles历史。
   errorMessage: string
+  questions: QuestionItem[]
+  missingQuestionKeys: string[]
+  questionJudgements: QuestionJudgementDTO[]
 }
 
-function createCard(sessionId: string, riskFactorType: string, mainQuestion: string): SessionCardState {
+function createCard(sessionId: string, riskFactorType: string, mainQuestion: string, questions: QuestionItem[] = []): SessionCardState {
   return {
     sessionId,
     riskFactorType,
@@ -39,22 +42,26 @@ function createCard(sessionId: string, riskFactorType: string, mainQuestion: str
     generatingText: '',
     generating: false,
     errorMessage: '',
+    questions,
+    missingQuestionKeys: questions.map((question) => question.question_key),
+    questionJudgements: [],
   }
 }
 
 function commitRound(card: SessionCardState, questionText: string, answerText: string) {
-  card.bubbles.push({ role: 'question', text: questionText })
-  card.bubbles.push({ role: 'answer', text: answerText })
+  card.bubbles = [...card.bubbles, { role: 'question', text: questionText }, { role: 'answer', text: answerText }]
 }
 
-// applyResult 是同步/流式两条路径共用的"结果落地"逻辑：
-// - processing：新问题写入 followUpQuestion，供表单下一轮展示（不产生气泡）。
-// - cleared/not_cleared：收尾话术作为一条system气泡写入只读历史，会话退出表单。
-// - error：不改动 followUpQuestion（保留上一次已知问题以便原地重试），仅记录errorMessage。
+// applyResult 是同步/流式两条路径共用的结果落地逻辑：
+// - processing：记录需要补充资料的追问，供统一表单展示。
+// - cleared/not_cleared：仅记录该风险要素已结束；批次收尾由 allSessionsDone 统一展示。
+// - error：保留上一次已知问题以便原地重试，仅记录 errorMessage。
 function applyResult(card: SessionCardState, result: SessionResultDTO) {
   card.generating = false
   card.status = result.status
   card.extractedInfo = result.extracted_info
+  card.missingQuestionKeys = result.missing_question_keys ?? []
+  card.questionJudgements = result.question_judgements ?? []
   if (!card.riskFactorType) card.riskFactorType = result.risk_factor_type
 
   if (result.error) {
@@ -86,17 +93,35 @@ function handleStreamEvent(card: SessionCardState, ev: SSEEvent) {
 // ---------------- 用户信息 & 主问题拉取阶段 ----------------
 const userId = ref('u_1001')
 const userName = ref('张三')
-const stream = ref(false)
+const stream = ref(true)
 
 const questionsFetched = ref(false)
 const loadingQuestions = ref(false)
 const questionsError = ref('')
 const qaItems = ref<MainQuestionItem[]>([])
-const answerDrafts = reactive<Record<string, string>>({})
+const answerDrafts = reactive<Record<string, QuestionDraftMap>>({})
 
-const allAnswered = computed(
-  () => qaItems.value.length > 0 && qaItems.value.every((item) => (answerDrafts[item.risk_factor_type] || '').trim().length > 0),
-)
+function createDraftMap(questions: QuestionItem[]): QuestionDraftMap {
+  return Object.fromEntries(questions.map((question) => [question.question_key, { text: '', fileIds: [], fileNames: [] }]))
+}
+function draftComplete(question: QuestionItem, draft?: QuestionDraft): boolean {
+  if (!draft || draft.uploading) return false
+  return question.answer_type === 'text' ? draft.text.trim().length > 0 : draft.fileIds.length >= question.min_submit_count
+}
+function toAnswers(questions: QuestionItem[], drafts: QuestionDraftMap): QuestionAnswerDTO[] {
+  const answers: QuestionAnswerDTO[] = []
+  for (const question of questions) {
+    const draft = drafts[question.question_key]
+    if (!draft) continue
+    if (question.answer_type === 'text' && draft.text.trim()) answers.push({ question_key: question.question_key, text: draft.text.trim() })
+    if (question.answer_type !== 'text' && draft.fileIds.length) answers.push({ question_key: question.question_key, file_ids: draft.fileIds })
+  }
+  return answers
+}
+function summarizeDrafts(questions: QuestionItem[], drafts: QuestionDraftMap): string {
+  return questions.map((question) => question.answer_type === 'text' ? `${question.question_text}：${drafts[question.question_key]?.text ?? ''}` : `${question.question_text}：已提交${drafts[question.question_key]?.fileIds.length ?? 0}个文件`).join('\n')
+}
+const allAnswered = computed(() => qaItems.value.length > 0 && qaItems.value.every((item) => item.questions.filter((q) => q.required).every((q) => draftComplete(q, answerDrafts[item.risk_factor_type]?.[q.question_key]))))
 
 async function handleStart() {
   questionsError.value = ''
@@ -114,7 +139,7 @@ async function handleStart() {
     }
     qaItems.value = resp.items
     for (const key of Object.keys(answerDrafts)) delete answerDrafts[key]
-    for (const item of resp.items) answerDrafts[item.risk_factor_type] = ''
+    for (const item of resp.items) answerDrafts[item.risk_factor_type] = createDraftMap(item.questions)
     questionsFetched.value = true
   } catch (e) {
     questionsError.value = (e as Error).message
@@ -139,6 +164,21 @@ function handleReset() {
 const submittingBatch = ref(false)
 const submitError = ref('')
 const batchSubmitted = ref(false)
+const submissionElapsedSeconds = ref(0)
+let submissionTimer: number | undefined
+
+function startSubmissionTimer() {
+  submissionElapsedSeconds.value = 0
+  if (submissionTimer !== undefined) window.clearInterval(submissionTimer)
+  submissionTimer = window.setInterval(() => submissionElapsedSeconds.value++, 1000)
+}
+
+function stopSubmissionTimer() {
+  if (submissionTimer !== undefined) window.clearInterval(submissionTimer)
+  submissionTimer = undefined
+}
+
+onUnmounted(stopSubmissionTimer)
 
 const batchId = ref('')
 const sessions = reactive<Record<string, SessionCardState>>({})
@@ -147,20 +187,29 @@ const sessionOrder = ref<string[]>([])
 // 所有需要用户输入的追问回答统一放在此处，与主问题表单同构：
 // 用户填完当前所有待回答项后一次性点击"提交回答"，并发提交给各自会话接口，
 // 而非每个会话卡片各自独立提交。
-const followUpDrafts = reactive<Record<string, string>>({})
+const followUpDrafts = reactive<Record<string, QuestionDraftMap>>({})
 const followUpSubmitting = ref(false)
 
 const pendingSessions = computed(() =>
   sessionOrder.value.map((id) => sessions[id]).filter((s) => s.status === 'processing' || s.status === 'llm_error'),
 )
+function pendingQuestions(session: SessionCardState): QuestionItem[] {
+  const missing = new Set(session.missingQuestionKeys)
+  return session.questions.filter((question) => missing.size === 0 || missing.has(question.question_key))
+}
+const pendingSessionsAnalyzing = computed(() => pendingSessions.value.some((session) => session.generating))
+const waitingForBatchResults = computed(() => submittingBatch.value && sessionOrder.value.length < qaItems.value.length)
+const allFollowUpAnswered = computed(() => pendingSessions.value.length > 0 && pendingSessions.value.every((session) => {
+  const questions = pendingQuestions(session)
+  return !session.generating && questions.length > 0 && questions.filter((q) => q.required).every((q) => draftComplete(q, followUpDrafts[session.sessionId]?.[q.question_key]))
+}))
 
-const allFollowUpAnswered = computed(
-  () =>
-    pendingSessions.value.length > 0 &&
-    pendingSessions.value.every((s) => !s.generating && (followUpDrafts[s.sessionId] || '').trim().length > 0),
+const allSessionsDone = computed(() =>
+  !submittingBatch.value
+  && qaItems.value.length > 0
+  && sessionOrder.value.length === qaItems.value.length
+  && pendingSessions.value.length === 0,
 )
-
-const allSessionsDone = computed(() => sessionOrder.value.length > 0 && pendingSessions.value.length === 0)
 
 // ---------------- 调试面板（独立展示，不影响主界面） ----------------
 const showDebug = ref(false)
@@ -170,6 +219,8 @@ const debugSessions = computed(() =>
     riskFactorType: sessions[id].riskFactorType,
     status: sessions[id].status,
     extractedInfo: sessions[id].extractedInfo,
+    missingQuestionKeys: sessions[id].missingQuestionKeys,
+    questionJudgements: sessions[id].questionJudgements,
   })),
 )
 
@@ -185,14 +236,11 @@ async function handleSubmitAll() {
 
   const payload = {
     user: { user_id: userId.value.trim(), name: userName.value.trim() || undefined },
-    risk_factors: qaItems.value.map((item) => ({
-      risk_factor_type: item.risk_factor_type,
-      main_question: item.main_question,
-      answer: answerDrafts[item.risk_factor_type].trim(),
-    })),
+    risk_factors: qaItems.value.map((item) => ({ risk_factor_type: item.risk_factor_type, answers: toAnswers(item.questions, answerDrafts[item.risk_factor_type]) })),
   }
 
   submittingBatch.value = true
+  startSubmissionTimer()
   resetSessions()
   batchId.value = ''
   batchSubmitted.value = true
@@ -205,8 +253,8 @@ async function handleSubmitAll() {
       for (let idx = 0; idx < results.length; idx++) {
         const r = results[idx]
         const item = qaItems.value[idx]
-        const answer = answerDrafts[item.risk_factor_type].trim()
-        const card = createCard(r.session_id, r.risk_factor_type, item.main_question)
+        const answer = summarizeDrafts(item.questions, answerDrafts[item.risk_factor_type])
+        const card = createCard(r.session_id, r.risk_factor_type, item.main_question, item.questions)
         commitRound(card, item.main_question, answer)
         sessions[card.sessionId] = card
         sessionOrder.value.push(card.sessionId)
@@ -235,8 +283,8 @@ async function handleSubmitAll() {
         let card = sessions[sessionId]
         if (!card) {
           const item = claimNextItem()
-          card = createCard(sessionId, item.risk_factor_type, item.main_question)
-          commitRound(card, item.main_question, answerDrafts[item.risk_factor_type].trim())
+          card = createCard(sessionId, item.risk_factor_type, item.main_question, item.questions)
+          commitRound(card, item.main_question, summarizeDrafts(item.questions, answerDrafts[item.risk_factor_type]))
           card.generating = true
           sessions[sessionId] = card
           sessionOrder.value.push(sessionId)
@@ -248,25 +296,27 @@ async function handleSubmitAll() {
     submitError.value = (e as Error).message
   } finally {
     submittingBatch.value = false
+    stopSubmissionTimer()
   }
 }
 
 // ---------------- 追问回答：统一表单一次性提交，并发调用各会话的追问接口 ----------------
-async function submitOneFollowUp(sessionId: string, answer: string) {
+async function submitOneFollowUp(sessionId: string, drafts: QuestionDraftMap) {
   const card = sessions[sessionId]
   if (!card) return
-
-  commitRound(card, card.followUpQuestion, answer)
+  const questions = pendingQuestions(card)
+  const answers = toAnswers(questions, drafts)
+  commitRound(card, card.followUpQuestion, summarizeDrafts(questions, drafts))
   card.generating = true
   card.generatingText = ''
   card.errorMessage = ''
 
   try {
     if (!stream.value) {
-      const result = await submitFollowUp(sessionId, answer)
+      const result = await submitFollowUp(sessionId, answers)
       applyResult(card, result)
     } else {
-      await submitFollowUpStream(sessionId, answer, (ev) => handleStreamEvent(card, ev))
+      await submitFollowUpStream(sessionId, answers, (ev) => handleStreamEvent(card, ev))
     }
   } catch (e) {
     card.generating = false
@@ -285,12 +335,12 @@ async function handleSubmitAllFollowUps() {
     .filter((s) => !s.generating)
     .map((s) => ({
       sessionId: s.sessionId,
-      answer: (followUpDrafts[s.sessionId] || '').trim(),
+      drafts: followUpDrafts[s.sessionId] ?? createDraftMap(pendingQuestions(s)),
     }))
   for (const t of targets) delete followUpDrafts[t.sessionId]
 
   try {
-    await Promise.all(targets.map((t) => submitOneFollowUp(t.sessionId, t.answer)))
+    await Promise.all(targets.map((t) => submitOneFollowUp(t.sessionId, t.drafts)))
   } finally {
     followUpSubmitting.value = false
   }
@@ -301,6 +351,26 @@ const queryBatchId = ref('')
 const queryError = ref('')
 const queryLoading = ref(false)
 
+function restoreSessionCard(session: SessionDetailDTO): SessionCardState {
+  const card = createCard(session.session_id, session.risk_factor_type, session.main_question, session.questions)
+  const history = session.history ?? []
+  if (history.length) {
+    for (const item of history) {
+      card.bubbles.push({ role: 'question', text: item.question }, { role: 'answer', text: item.answer })
+    }
+  } else {
+    card.bubbles.push({ role: 'question', text: session.main_question })
+  }
+  card.extractedInfo = session.extracted_info
+  card.status = session.status
+  card.missingQuestionKeys = session.missing_question_keys ?? []
+  card.questionJudgements = session.question_judgements ?? []
+  if (session.error) card.errorMessage = session.error.message
+  else if (session.status === 'processing') card.followUpQuestion = session.message
+  else card.bubbles.push({ role: 'system', text: session.message })
+  return card
+}
+
 async function handleQueryBatch() {
   queryError.value = ''
   const id = queryBatchId.value.trim()
@@ -308,32 +378,31 @@ async function handleQueryBatch() {
   queryLoading.value = true
   try {
     const resp = await getBatch(id)
+    const restoredSessions = resp.sessions ?? []
+    if (!restoredSessions.length) throw new Error('该批次没有可恢复的会话')
+    if (restoredSessions.some((session) => !Array.isArray(session.questions) || !session.questions.length)) {
+      throw new Error('批次响应缺少问题配置，请确认后端已更新后重试')
+    }
+
+    userId.value = resp.user_id
+    userName.value = resp.user_name
     batchId.value = resp.batch_id
+    qaItems.value = restoredSessions.map((session) => ({
+      risk_factor_type: session.risk_factor_type,
+      main_question: session.main_question,
+      questions: session.questions,
+    }))
+    for (const key of Object.keys(answerDrafts)) delete answerDrafts[key]
+    for (const key of Object.keys(followUpDrafts)) delete followUpDrafts[key]
     resetSessions()
-    for (const s of resp.sessions ?? []) {
-      const card = createCard(s.session_id, s.risk_factor_type, s.main_question)
-      const history = s.history ?? []
-      if (history.length) {
-        for (const h of history) {
-          card.bubbles.push({ role: 'question', text: h.question })
-          card.bubbles.push({ role: 'answer', text: h.answer })
-        }
-      } else {
-        card.bubbles.push({ role: 'question', text: s.main_question })
+
+    for (const session of restoredSessions) {
+      const card = restoreSessionCard(session)
+      sessions[session.session_id] = card
+      sessionOrder.value.push(session.session_id)
+      if (session.status === 'processing' || session.status === 'llm_error') {
+        followUpDrafts[session.session_id] = createDraftMap(pendingQuestions(card))
       }
-      card.extractedInfo = s.extracted_info
-      if (s.error) {
-        card.errorMessage = s.error.message
-        card.status = s.status
-      } else if (s.status === 'processing') {
-        card.followUpQuestion = s.message
-        card.status = s.status
-      } else {
-        card.bubbles.push({ role: 'system', text: s.message })
-        card.status = s.status
-      }
-      sessions[s.session_id] = card
-      sessionOrder.value.push(s.session_id)
     }
     questionsFetched.value = true
     batchSubmitted.value = true
@@ -362,7 +431,6 @@ async function handleQueryBatch() {
       <RiskFactorForm
         v-model:userId="userId"
         v-model:userName="userName"
-        v-model:stream="stream"
         :loading="loadingQuestions"
         :started="questionsFetched"
         @start="handleStart"
@@ -383,10 +451,12 @@ async function handleQueryBatch() {
             v-for="item in qaItems"
             :key="item.risk_factor_type"
             :risk-factor-type="item.risk_factor_type"
+            :user-id="userId"
             :main-question="item.main_question"
-            :answer="answerDrafts[item.risk_factor_type]"
+            :questions="item.questions"
+            :drafts="answerDrafts[item.risk_factor_type]"
             :disabled="submittingBatch"
-            @update:answer="(v) => (answerDrafts[item.risk_factor_type] = v)"
+            @update:drafts="(v) => (answerDrafts[item.risk_factor_type] = v)"
           />
           <p v-if="submitError" class="error-text">{{ submitError }}</p>
           <div class="submit-row">
@@ -397,7 +467,9 @@ async function handleQueryBatch() {
         </template>
 
         <template v-if="batchSubmitted">
-          <div v-if="submittingBatch && !sessionOrder.length" class="hint-bubble">正在提交，请稍候…</div>
+          <div v-if="waitingForBatchResults" class="hint-bubble">
+            资料已提交，正在等待其余风险要素的分析结果（图片审核可能需要数分钟），已等待 {{ submissionElapsedSeconds }} 秒…
+          </div>
 
           <SessionCard
             v-for="sid in sessionOrder"
@@ -407,18 +479,23 @@ async function handleQueryBatch() {
           />
 
           <template v-if="pendingSessions.length">
-            <div class="hint-bubble">还有 {{ pendingSessions.length }} 个问题待回答，请在下方统一填写后提交：</div>
+            <div v-if="pendingSessionsAnalyzing" class="hint-bubble">正在分析其余资料，请稍候…</div>
+            <div v-else class="hint-bubble">
+              审核后发现仍有 {{ pendingSessions.length }} 个风险要素需要补充资料，请填写下方缺失内容后统一提交：
+            </div>
             <QAFormCard
               v-for="s in pendingSessions"
               :key="s.sessionId"
+              :user-id="userId"
               :risk-factor-type="s.riskFactorType"
               :main-question="s.generating ? s.generatingText : s.followUpQuestion"
-              :answer="followUpDrafts[s.sessionId] || ''"
+              :questions="pendingQuestions(s)"
+              :drafts="followUpDrafts[s.sessionId] ?? createDraftMap(pendingQuestions(s))"
               :disabled="followUpSubmitting || s.generating"
               :generating="s.generating"
               :show-cursor="s.generating && stream"
               :error-message="s.errorMessage"
-              @update:answer="(v) => (followUpDrafts[s.sessionId] = v)"
+              @update:drafts="(v) => (followUpDrafts[s.sessionId] = v)"
             />
             <div class="submit-row">
               <button
@@ -432,13 +509,14 @@ async function handleQueryBatch() {
             </div>
           </template>
 
-          <div v-else-if="allSessionsDone" class="hint-bubble">全部问题已完成，感谢您的配合。</div>
+          <div v-else-if="allSessionsDone" class="hint-bubble">审核结果将在3个工作日内推送给您。</div>
         </template>
       </div>
     </div>
 
     <DebugPanel
       :open="showDebug"
+      v-model:stream="stream"
       :batch-id="batchId"
       :sessions="debugSessions"
       v-model:query-batch-id="queryBatchId"

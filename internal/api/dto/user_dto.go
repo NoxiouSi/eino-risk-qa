@@ -1,12 +1,20 @@
 package dto
 
-// MainQuestionItem 单个风险要素类型及其对应的主问题。
-type MainQuestionItem struct {
-	RiskFactorType string `json:"risk_factor_type"`
-	MainQuestion   string `json:"main_question"`
+type QuestionItem struct {
+	QuestionKey    string `json:"question_key"`
+	QuestionText   string `json:"question_text"`
+	AnswerType     string `json:"answer_type"`
+	Required       bool   `json:"required"`
+	MinSubmitCount int    `json:"min_submit_count"`
+	SortOrder      int    `json:"sort_order"`
 }
 
-// MainQuestionsResponse 对应 GET /api/v1/users/{user_id}/main-questions 响应体。
+type MainQuestionItem struct {
+	RiskFactorType string         `json:"risk_factor_type"`
+	MainQuestion   string         `json:"main_question"`
+	Questions      []QuestionItem `json:"questions"`
+}
+
 type MainQuestionsResponse struct {
 	UserID string             `json:"user_id"`
 	Items  []MainQuestionItem `json:"items"`

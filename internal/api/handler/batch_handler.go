@@ -88,7 +88,7 @@ func (h *BatchHandler) GetBatch(ctx context.Context, c *app.RequestContext) {
 	}
 
 	log.Info("get batch: succeeded", "batch_id", batchID, "session_count", len(result.Results))
-	resp := dto.BatchResponse{BatchID: result.BatchID, CreatedAt: result.CreatedAt.Format(rfc3339)}
+	resp := dto.BatchResponse{BatchID: result.BatchID, UserID: result.UserID, UserName: result.UserName, CreatedAt: result.CreatedAt.Format(rfc3339)}
 	for _, r := range result.Results {
 		resp.Sessions = append(resp.Sessions, toSessionDetailDTO(r))
 	}
@@ -103,8 +103,13 @@ func validateBatchRequest(req dto.BatchRequest) error {
 		return invalidParamError("risk_factors must not be empty")
 	}
 	for _, rf := range req.RiskFactors {
-		if rf.RiskFactorType == "" || rf.MainQuestion == "" || rf.Answer == "" {
-			return invalidParamError("risk_factor_type, main_question and answer are required for every risk factor")
+		if rf.RiskFactorType == "" || (len(rf.Answers) == 0 && (rf.MainQuestion == "" || rf.Answer == "")) {
+			return invalidParamError("risk_factor_type and answers are required for every risk factor")
+		}
+		for _, answer := range rf.Answers {
+			if answer.QuestionKey == "" || (answer.Text == "" && len(answer.FileIDs) == 0) || (answer.Text != "" && len(answer.FileIDs) > 0) {
+				return invalidParamError("each answer requires question_key and exactly one of text or file_ids")
+			}
 		}
 	}
 	return nil
@@ -116,17 +121,17 @@ func toSubmitBatchInput(req dto.BatchRequest) application.SubmitBatchInput {
 		UserName: req.User.Name,
 	}
 	for _, rf := range req.RiskFactors {
-		input.RiskFactors = append(input.RiskFactors, application.RiskFactorInput{
-			RiskFactorType: parseRiskFactorType(rf.RiskFactorType),
-			MainQuestion:   rf.MainQuestion,
-			Answer:         rf.Answer,
-		})
+		answers := make([]application.QuestionAnswerInput, 0, len(rf.Answers))
+		for _, answer := range rf.Answers {
+			answers = append(answers, application.QuestionAnswerInput{QuestionKey: answer.QuestionKey, Text: answer.Text, FileIDs: answer.FileIDs})
+		}
+		input.RiskFactors = append(input.RiskFactors, application.RiskFactorInput{RiskFactorType: parseRiskFactorType(rf.RiskFactorType), Answers: answers, MainQuestion: rf.MainQuestion, Answer: rf.Answer})
 	}
 	return input
 }
 
 func toBatchResponse(result application.BatchResult) dto.BatchResponse {
-	resp := dto.BatchResponse{BatchID: result.BatchID, CreatedAt: result.CreatedAt.Format(rfc3339)}
+	resp := dto.BatchResponse{BatchID: result.BatchID, UserID: result.UserID, UserName: result.UserName, CreatedAt: result.CreatedAt.Format(rfc3339)}
 	for _, r := range result.Results {
 		resp.Results = append(resp.Results, toSessionResultDTO(r))
 	}

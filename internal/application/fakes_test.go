@@ -16,6 +16,7 @@ type fakeJudger struct {
 	responses map[string]*riskfactor.JudgementResult // 按 LatestAnswer 匹配
 	errs      map[string]error
 	calls     int
+	inputs    []riskfactor.JudgeInput
 }
 
 func newFakeJudger() *fakeJudger {
@@ -28,6 +29,7 @@ func newFakeJudger() *fakeJudger {
 func (f *fakeJudger) Judge(ctx context.Context, input riskfactor.JudgeInput) (*riskfactor.JudgementResult, error) {
 	f.mu.Lock()
 	f.calls++
+	f.inputs = append(f.inputs, input)
 	f.mu.Unlock()
 	if err, ok := f.errs[input.LatestAnswer]; ok {
 		return nil, err
@@ -170,20 +172,58 @@ var _ application.IDGenerator = (*sequentialIDGenerator)(nil)
 // 映射返回结果。
 type fakeMainQuestionCatalog struct {
 	questions map[string]string
+	trees     map[string]application.QuestionTree
 }
 
 func newFakeMainQuestionCatalog() *fakeMainQuestionCatalog {
-	return &fakeMainQuestionCatalog{questions: map[string]string{}}
+	return &fakeMainQuestionCatalog{questions: map[string]string{}, trees: map[string]application.QuestionTree{}}
 }
 
-func (c *fakeMainQuestionCatalog) FindMainQuestions(ctx context.Context, riskFactorTypes []string) (map[string]string, error) {
-	result := make(map[string]string, len(riskFactorTypes))
+func (c *fakeMainQuestionCatalog) FindQuestionTrees(ctx context.Context, riskFactorTypes []string) (map[string]application.QuestionTree, error) {
+	result := make(map[string]application.QuestionTree, len(riskFactorTypes))
 	for _, t := range riskFactorTypes {
+		if tree, ok := c.trees[t]; ok {
+			result[t] = tree
+			continue
+		}
 		if q, ok := c.questions[t]; ok {
-			result[t] = q
+			result[t] = application.QuestionTree{RiskFactorType: t, Root: application.QuestionNode{RiskFactorType: t, QuestionKey: t + "_main", QuestionText: q, AnswerType: "group"}}
 		}
 	}
 	return result, nil
 }
 
-var _ application.MainQuestionCatalog = (*fakeMainQuestionCatalog)(nil)
+var _ application.RiskFactorQuestionCatalog = (*fakeMainQuestionCatalog)(nil)
+
+type fakeAttachmentRepository struct {
+	files map[string]application.UploadedFile
+}
+
+func newFakeAttachmentRepository() *fakeAttachmentRepository {
+	return &fakeAttachmentRepository{files: map[string]application.UploadedFile{}}
+}
+
+func (r *fakeAttachmentRepository) Create(ctx context.Context, file application.UploadedFile) error {
+	r.files[file.FileID] = file
+	return nil
+}
+
+func (r *fakeAttachmentRepository) FindOwned(ctx context.Context, fileID, userID, riskFactorType, questionKey string) (*application.UploadedFile, error) {
+	file, ok := r.files[fileID]
+	if !ok || file.UserID != userID || file.RiskFactorType != riskFactorType || file.QuestionKey != questionKey {
+		return nil, fmt.Errorf("file not found")
+	}
+	return &file, nil
+}
+
+func (r *fakeAttachmentRepository) CountOwned(ctx context.Context, userID, riskFactorType, questionKey string) (int64, error) {
+	var count int64
+	for _, file := range r.files {
+		if file.UserID == userID && file.RiskFactorType == riskFactorType && file.QuestionKey == questionKey {
+			count++
+		}
+	}
+	return count, nil
+}
+
+var _ application.AttachmentRepository = (*fakeAttachmentRepository)(nil)

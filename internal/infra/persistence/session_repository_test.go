@@ -36,7 +36,7 @@ func TestGORMSessionRepository_SaveAndFindByID_RoundTrip_Cleared(t *testing.T) {
 	loaded, err := repo.FindByID(ctx, "sess_roundtrip_1")
 	require.NoError(t, err)
 	assert.Equal(t, riskfactor.StatusCleared, loaded.Status)
-	assert.Equal(t, riskfactor.ClosingMessage, loaded.UserMessage())
+	assert.Equal(t, riskfactor.SessionCompletedMessage, loaded.UserMessage())
 	assert.Equal(t, "财务经理", loaded.ExtractedInfo["occupation"])
 	require.Len(t, loaded.History, 1)
 	assert.Equal(t, 0, loaded.History[0].Round)
@@ -45,6 +45,32 @@ func TestGORMSessionRepository_SaveAndFindByID_RoundTrip_Cleared(t *testing.T) {
 
 // Save 应支持"先保存Processing态（含追问）→ 追问回答后再次保存”这种跨多次调用的增量持久化：
 // 第二次 Save 不应重复插入 round=0 的 QA 记录，只新增 round=1 的记录。
+func TestGORMSessionRepository_Save_PersistsStructuredSubmissionsAndJudgements(t *testing.T) {
+	db := setupTestDB(t)
+	repo := persistence.NewGORMSessionRepository(db)
+	s := newSession("sess_structured_1")
+	require.NoError(t, s.SubmitInitialAnswer("结构化回答摘要", &riskfactor.JudgementResult{Completeness: true, Reasonableness: true, Questions: []riskfactor.QuestionJudgement{{QuestionKey: "real_name", Required: true, Completeness: true, Reasonableness: true}}}))
+	s.History[0].Answers = []riskfactor.QuestionAnswer{{QuestionKey: "real_name", ValueType: "text", Text: "张三"}, {QuestionKey: "id_card_image", ValueType: "image", FileIDs: []string{"file_1"}}}
+
+	require.NoError(t, repo.Save(context.Background(), s))
+
+	var submissions []persistence.QuestionSubmissionModel
+	require.NoError(t, db.Where("session_id = ?", s.ID).Order("question_key").Find(&submissions).Error)
+	require.Len(t, submissions, 2)
+	assert.Equal(t, "image", submissions[0].ValueType)
+	assert.Equal(t, "text", submissions[1].ValueType)
+	var qa persistence.QARecordModel
+	require.NoError(t, db.Where("session_id = ?", s.ID).First(&qa).Error)
+	assert.NotEmpty(t, qa.QuestionJudgements)
+	assert.Equal(t, true, qa.QuestionJudgements[0]["required"])
+
+	restored, err := repo.FindByID(context.Background(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, restored.History, 1)
+	require.Len(t, restored.History[0].Judgements, 1)
+	assert.True(t, restored.History[0].Judgements[0].Required)
+}
+
 func TestGORMSessionRepository_IncrementalSave_AcrossFollowUpRounds(t *testing.T) {
 	db := setupTestDB(t)
 	repo := persistence.NewGORMSessionRepository(db)
@@ -100,7 +126,7 @@ func TestGORMSessionRepository_SaveAndFindByID_NotClearedMaxRounds(t *testing.T)
 	assert.Equal(t, riskfactor.StatusNotCleared, loaded.Status)
 	require.NotNil(t, loaded.TerminationReason)
 	assert.Equal(t, riskfactor.TerminationReasonMaxRoundsIncomplete, *loaded.TerminationReason)
-	assert.Equal(t, riskfactor.ClosingMessage, loaded.UserMessage())
+	assert.Equal(t, riskfactor.SessionCompletedMessage, loaded.UserMessage())
 	assert.Len(t, loaded.History, 4)
 }
 

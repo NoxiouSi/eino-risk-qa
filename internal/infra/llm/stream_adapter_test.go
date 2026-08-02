@@ -53,9 +53,8 @@ func TestJudgerAdapter_JudgeStream_Incomplete_StreamsFollowUpQuestionIncremental
 	assert.Equal(t, result.FollowUpQuestion, joined)
 }
 
-// 终态场景（completeness=true）：follow_up_question 为空，不应产生"逐字"增量，
-// 而是一次性发出完整的 ClosingMessage 作为唯一的 message_delta 事件。
-func TestJudgerAdapter_JudgeStream_Complete_EmitsClosingMessageOnce(t *testing.T) {
+// 终态场景（completeness=true）不产生 message_delta；批次收尾由聚合全部会话状态后展示。
+func TestJudgerAdapter_JudgeStream_Complete_DoesNotEmitBatchClosingMessage(t *testing.T) {
 	adapter := llm.NewJudgerAdapter(llm.NewMockChatModel())
 
 	events, err := adapter.JudgeStream(context.Background(), riskfactor.JudgeInput{
@@ -80,8 +79,7 @@ func TestJudgerAdapter_JudgeStream_Complete_EmitsClosingMessageOnce(t *testing.T
 
 	require.NotNil(t, result)
 	assert.True(t, result.Completeness)
-	require.Len(t, deltaEvents, 1, "终态收尾话术应一次性给出，不逐字模拟")
-	assert.Equal(t, riskfactor.ClosingMessage, deltaEvents[0].MessageDelta)
+	assert.Empty(t, deltaEvents, "单个风险要素完成时不得输出批次收尾文案")
 }
 
 // channel 必须在所有事件发出后正常关闭（for range 能自然退出，不需要额外的 done 信号）。

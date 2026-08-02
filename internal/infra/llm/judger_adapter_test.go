@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -83,6 +84,41 @@ func (m *brokenToolCallModel) WithTools(tools []*schema.ToolInfo) (model.ToolCal
 	return m, nil
 }
 
+func TestJudgerAdapter_Judge_FollowUpKeepsPriorCompletedQuestion(t *testing.T) {
+	adapter := llm.NewJudgerAdapter(llm.NewMockChatModel())
+	input := riskfactor.JudgeInput{
+		RiskFactorType:  riskfactor.RiskFactorTypeIdentity,
+		MainQuestion:    "请提交身份信息",
+		CurrentQuestion: "请补充身份证号",
+		LatestAnswer:    "身份证号码为110101199001011234，信息真实有效",
+		Questions: []riskfactor.QuestionSpec{
+			{QuestionKey: "real_name", Required: true, AnswerType: "text"},
+			{QuestionKey: "id_card_number", Required: true, AnswerType: "text"},
+		},
+		History: []riskfactor.QAPair{{Judgements: []riskfactor.QuestionJudgement{{QuestionKey: "real_name", Required: true, Completeness: true, Reasonableness: true}}}},
+		Answers: []riskfactor.QuestionAnswer{{QuestionKey: "id_card_number", ValueType: "text", Text: "110101199001011234"}},
+	}
+
+	result, err := adapter.Judge(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.True(t, result.Completeness)
+	require.Len(t, result.Questions, 2)
+	assert.True(t, result.Questions[0].Completeness)
+	assert.True(t, result.Questions[1].Completeness)
+}
+
+func TestJudgerAdapter_Judge_ImageWithoutVisionProviderFails(t *testing.T) {
+	adapter := llm.NewJudgerAdapter(llm.NewMockChatModel())
+
+	_, err := adapter.Judge(context.Background(), riskfactor.JudgeInput{
+		Questions: []riskfactor.QuestionSpec{{QuestionKey: "image", Required: true, AnswerType: "image"}},
+		Answers:   []riskfactor.QuestionAnswer{{QuestionKey: "image", ValueType: "image", ImagePaths: []string{"unused.jpg"}}},
+	})
+
+	assert.ErrorIs(t, err, llm.ErrVisionProviderRequired)
+}
+
 func TestJudgerAdapter_Judge_RetriesOnParseFailure_ThenFails(t *testing.T) {
 	broken := &brokenToolCallModel{}
 	adapter := llm.NewJudgerAdapter(broken)
@@ -121,4 +157,34 @@ func TestJudgerAdapter_Judge_NoToolCall_ReturnsMaxRetriesExceeded(t *testing.T) 
 	})
 
 	assert.ErrorIs(t, err, llm.ErrMaxRetriesExceeded)
+}
+
+type hangingChatModel struct{}
+
+func (hangingChatModel) Generate(ctx context.Context, _ []*schema.Message, _ ...model.Option) (*schema.Message, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (hangingChatModel) Stream(context.Context, []*schema.Message, ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	return nil, errors.New("not used")
+}
+
+func (m hangingChatModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	return m, nil
+}
+
+func TestJudgerAdapter_Judge_TimesOutHangingModel(t *testing.T) {
+	adapter := llm.NewJudgerAdapter(hangingChatModel{})
+	adapter.ConfigureRequestTimeout(20 * time.Millisecond)
+
+	started := time.Now()
+	_, err := adapter.Judge(context.Background(), riskfactor.JudgeInput{
+		RiskFactorType: riskfactor.RiskFactorTypeIdentity,
+		MainQuestion:   "主问题",
+		LatestAnswer:   "回答",
+	})
+
+	assert.ErrorIs(t, err, llm.ErrRequestTimeout)
+	assert.Less(t, time.Since(started), time.Second)
 }
