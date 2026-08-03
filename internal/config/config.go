@@ -50,6 +50,7 @@ type LLMConfig struct {
 type StorageConfig struct {
 	LocalDir            string   `mapstructure:"local_dir"`
 	MaxFileBytes        int64    `mapstructure:"max_file_bytes"`
+	MaxStoredImageBytes int64    `mapstructure:"max_stored_image_bytes"`
 	MaxFilesPerQuestion int      `mapstructure:"max_files_per_question"`
 	AllowedMIMETypes    []string `mapstructure:"allowed_mime_types"`
 }
@@ -127,6 +128,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("llm.deepseek.model", "deepseek-chat")
 	v.SetDefault("storage.local_dir", "./data/uploads")
 	v.SetDefault("storage.max_file_bytes", 10*1024*1024)
+	v.SetDefault("storage.max_stored_image_bytes", 1024*1024)
 	v.SetDefault("storage.max_files_per_question", 5)
 	v.SetDefault("storage.allowed_mime_types", []string{"image/jpeg", "image/png", "image/webp"})
 	v.SetDefault("auth.api_key", "")
@@ -141,7 +143,7 @@ func bindAllEnvKeys(v *viper.Viper) {
 		"llm.provider", "llm.vision_provider", "llm.request_timeout_seconds", "llm.openai.api_key", "llm.openai.base_url", "llm.openai.model",
 		"llm.ark.base_url", "llm.ark.model",
 		"llm.deepseek.api_key", "llm.deepseek.base_url", "llm.deepseek.model",
-		"storage.local_dir", "storage.max_file_bytes", "storage.max_files_per_question", "storage.allowed_mime_types",
+		"storage.local_dir", "storage.max_file_bytes", "storage.max_stored_image_bytes", "storage.max_files_per_question", "storage.allowed_mime_types",
 		"auth.api_key",
 		"log.level",
 	}

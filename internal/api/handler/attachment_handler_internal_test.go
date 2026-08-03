@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"image/png"
+	"math/rand"
 	"mime/multipart"
 	"net/http"
 	"testing"
@@ -44,11 +46,13 @@ func TestReadAndValidateImage_AcceptsDecodedPNG(t *testing.T) {
 	data := tinyPNG(t)
 	header := multipartImageHeader(t, "evidence.png", data)
 
-	got, mimeType, err := readAndValidateImage(header, config.StorageConfig{MaxFileBytes: 1024, AllowedMIMETypes: []string{"image/png"}})
+	got, mimeType, err := readAndValidateImage(header, config.StorageConfig{MaxFileBytes: 1024, MaxStoredImageBytes: 1024, AllowedMIMETypes: []string{"image/png"}})
 
 	require.NoError(t, err)
-	assert.Equal(t, "image/png", mimeType)
-	assert.Equal(t, data, got)
+	assert.Equal(t, "image/jpeg", mimeType)
+	assert.LessOrEqual(t, len(got), 1024)
+	_, err = jpeg.Decode(bytes.NewReader(got))
+	assert.NoError(t, err)
 }
 
 func TestReadAndValidateImage_RejectsExtensionMismatch(t *testing.T) {
@@ -65,4 +69,31 @@ func TestReadAndValidateImage_RejectsOversizeContent(t *testing.T) {
 	_, _, err := readAndValidateImage(header, config.StorageConfig{MaxFileBytes: 8, AllowedMIMETypes: []string{"image/png"}})
 
 	assert.ErrorContains(t, err, "size exceeds")
+}
+
+func TestReadAndValidateImage_CompressesNoisyImageBelowStoredLimit(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 800, 800))
+	rng := rand.New(rand.NewSource(1))
+	for offset := 0; offset < len(img.Pix); offset += 4 {
+		img.Pix[offset] = byte(rng.Intn(256))
+		img.Pix[offset+1] = byte(rng.Intn(256))
+		img.Pix[offset+2] = byte(rng.Intn(256))
+		img.Pix[offset+3] = 255
+	}
+	var original bytes.Buffer
+	require.NoError(t, png.Encode(&original, img))
+	header := multipartImageHeader(t, "identity.png", original.Bytes())
+
+	compressed, mimeType, err := readAndValidateImage(header, config.StorageConfig{
+		MaxFileBytes:        int64(original.Len() + 1),
+		MaxStoredImageBytes: 64 * 1024,
+		AllowedMIMETypes:    []string{"image/png"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "image/jpeg", mimeType)
+	assert.LessOrEqual(t, len(compressed), 64*1024)
+	assert.Less(t, len(compressed), original.Len())
+	_, err = jpeg.Decode(bytes.NewReader(compressed))
+	assert.NoError(t, err)
 }

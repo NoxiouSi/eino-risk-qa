@@ -19,6 +19,7 @@ llm:
 storage:
   local_dir: "./data/test-uploads"
   max_file_bytes: 1048576
+  max_stored_image_bytes: 1048576
   max_files_per_question: 3
   allowed_mime_types:
     - "image/jpeg"

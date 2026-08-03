@@ -216,14 +216,4 @@ func (r *fakeAttachmentRepository) FindOwned(ctx context.Context, fileID, userID
 	return &file, nil
 }
 
-func (r *fakeAttachmentRepository) CountOwned(ctx context.Context, userID, riskFactorType, questionKey string) (int64, error) {
-	var count int64
-	for _, file := range r.files {
-		if file.UserID == userID && file.RiskFactorType == riskFactorType && file.QuestionKey == questionKey {
-			count++
-		}
-	}
-	return count, nil
-}
-
 var _ application.AttachmentRepository = (*fakeAttachmentRepository)(nil)

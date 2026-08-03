@@ -66,5 +66,4 @@ type UploadedFile struct {
 type AttachmentRepository interface {
 	Create(ctx context.Context, file UploadedFile) error
 	FindOwned(ctx context.Context, fileID, userID, riskFactorType, questionKey string) (*UploadedFile, error)
-	CountOwned(ctx context.Context, userID, riskFactorType, questionKey string) (int64, error)
 }

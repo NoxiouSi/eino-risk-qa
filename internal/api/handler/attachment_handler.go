@@ -1,15 +1,10 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"image"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -62,7 +57,7 @@ func (h *AttachmentHandler) Upload(ctx context.Context, c *app.RequestContext) {
 		writeError(c, http.StatusBadRequest, CodeInvalidParam, "user_id, risk_factor_type and question_key are required")
 		return
 	}
-	if status, code, message := h.validateUploadTarget(ctx, userID, riskType, questionKey); status != 0 {
+	if status, code, message := h.validateUploadTarget(ctx, riskType, questionKey); status != 0 {
 		writeError(c, status, code, message)
 		return
 	}
@@ -103,22 +98,16 @@ func (h *AttachmentHandler) Upload(ctx context.Context, c *app.RequestContext) {
 	c.JSON(consts.StatusCreated, attachmentResponse{FileID: fileID, OriginalName: meta.OriginalName, MIMEType: mimeType, SizeBytes: meta.SizeBytes})
 }
 
-func (h *AttachmentHandler) validateUploadTarget(ctx context.Context, userID, riskType, questionKey string) (int, string, string) {
-	if h.catalog != nil {
-		valid, err := h.isUploadQuestion(ctx, riskType, questionKey)
-		if err != nil {
-			return http.StatusInternalServerError, CodeInternalError, "load question configuration failed"
-		}
-		if !valid {
-			return http.StatusBadRequest, CodeInvalidParam, "question_key is not an enabled image or file question"
-		}
+func (h *AttachmentHandler) validateUploadTarget(ctx context.Context, riskType, questionKey string) (int, string, string) {
+	if h.catalog == nil {
+		return 0, "", ""
 	}
-	count, err := h.repo.CountOwned(ctx, userID, riskType, questionKey)
+	valid, err := h.isUploadQuestion(ctx, riskType, questionKey)
 	if err != nil {
-		return http.StatusInternalServerError, CodeInternalError, "count uploaded files failed"
+		return http.StatusInternalServerError, CodeInternalError, "load question configuration failed"
 	}
-	if h.cfg.MaxFilesPerQuestion > 0 && count >= int64(h.cfg.MaxFilesPerQuestion) {
-		return http.StatusBadRequest, CodeInvalidParam, "file count exceeds question limit"
+	if !valid {
+		return http.StatusBadRequest, CodeInvalidParam, "question_key is not an enabled image or file question"
 	}
 	return 0, "", ""
 }
@@ -153,24 +142,22 @@ func readAndValidateImage(header *multipart.FileHeader, cfg config.StorageConfig
 	if int64(len(data)) > cfg.MaxFileBytes {
 		return nil, "", fmt.Errorf("file size exceeds limit")
 	}
-	mimeType := http.DetectContentType(data)
-	if !extensionMatchesMIME(strings.ToLower(filepath.Ext(header.Filename)), mimeType) {
+	inputMIMEType := http.DetectContentType(data)
+	if !extensionMatchesMIME(strings.ToLower(filepath.Ext(header.Filename)), inputMIMEType) {
 		return nil, "", fmt.Errorf("file extension does not match image content")
 	}
-	if !slices.Contains(cfg.AllowedMIMETypes, mimeType) {
+	if !slices.Contains(cfg.AllowedMIMETypes, inputMIMEType) {
 		return nil, "", fmt.Errorf("unsupported image type")
 	}
-	if mimeType == mimeWebP {
-		if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
-			return nil, "", fmt.Errorf("invalid webp content")
-		}
-	} else if _, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
-		return nil, "", fmt.Errorf("invalid image content")
+	targetBytes := cfg.MaxStoredImageBytes
+	if targetBytes <= 0 {
+		targetBytes = 1024 * 1024
 	}
-	if extensionForMIME(mimeType) == "" {
-		return nil, "", fmt.Errorf("unsupported image extension")
+	compressed, err := compressImageToJPEG(data, targetBytes)
+	if err != nil {
+		return nil, "", err
 	}
-	return data, mimeType, nil
+	return compressed, mimeJPEG, nil
 }
 
 func extensionMatchesMIME(ext, mimeType string) bool {

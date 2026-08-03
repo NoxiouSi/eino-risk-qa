@@ -24,6 +24,7 @@ func TestLoad_NoConfigFile_UsesDefaults(t *testing.T) {
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.Equal(t, "./data/uploads", cfg.Storage.LocalDir)
 	assert.EqualValues(t, 10*1024*1024, cfg.Storage.MaxFileBytes)
+	assert.EqualValues(t, 1024*1024, cfg.Storage.MaxStoredImageBytes)
 	assert.Equal(t, 5, cfg.Storage.MaxFilesPerQuestion)
 	assert.Contains(t, cfg.Storage.AllowedMIMETypes, "image/jpeg")
 }

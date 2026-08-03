@@ -16,7 +16,7 @@
 
 `audit_skills`独立保存可运营审核规则，`question_skill_refs`支持问题与Skill多对多引用；LLM Prompt按引用顺序动态组合规则。Tool Calling返回`items[]`逐问题判断，领域层根据全部必填问题执行AND聚合，模型漏项按不完整处理，响应返回`missing_question_keys`和`question_judgements`。
 
-结构化答案独立写入`question_submissions`；图片二进制保存于`storage.local_dir`，`uploaded_files`仅保存受控相对路径、归属、MIME、大小及SHA-256。上传接口校验大小、MIME和图片内容，使用UUID文件名及受限权限。Eino v0.9.13通过`Message.UserInputMultiContent`与`MessageInputImage.Base64Data`传入真实图片；图片审核通过`llm.vision_provider: ark`分流到火山引擎 Ark OpenAI 兼容接口，使用豆包视觉模型，`ARK_API_KEY`仅从环境变量注入。
+结构化答案独立写入`question_submissions`；图片二进制保存于`storage.local_dir`，`uploaded_files`仅保存受控相对路径、归属、MIME、大小及SHA-256。上传接口先校验原始文件大小、扩展名、MIME和真实图片内容，再统一转换为JPEG并在必要时缩放、调整质量，确保压缩后不超过`storage.max_stored_image_bytes`（默认1MB）才落盘；数据库大小、MIME和SHA-256均以压缩后文件为准。`max_files_per_question`只限制当前一次答案引用的`file_ids`，不累计历史上传记录。Eino v0.9.13通过`Message.UserInputMultiContent`与`MessageInputImage.Base64Data`读取压缩后的落盘文件并传入模型；图片审核通过`llm.vision_provider: ark`分流到火山引擎 Ark OpenAI 兼容接口，使用豆包视觉模型，`ARK_API_KEY`仅从环境变量注入。
 
 ### 数据关系
 

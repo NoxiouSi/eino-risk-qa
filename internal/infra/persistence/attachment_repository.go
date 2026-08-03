@@ -25,12 +25,6 @@ func (r *GORMAttachmentRepository) Create(ctx context.Context, file application.
 	return r.db.WithContext(ctx).Create(&UploadedFileModel{FileID: file.FileID, UserID: file.UserID, RiskFactorType: file.RiskFactorType, QuestionKey: file.QuestionKey, OriginalName: file.OriginalName, StoredPath: file.StoredPath, MIMEType: file.MIMEType, SizeBytes: file.SizeBytes, SHA256: file.SHA256, CreatedAt: file.CreatedAt}).Error
 }
 
-func (r *GORMAttachmentRepository) CountOwned(ctx context.Context, userID, riskFactorType, questionKey string) (int64, error) {
-	var count int64
-	err := r.db.WithContext(ctx).Model(&UploadedFileModel{}).Where("user_id = ? AND risk_factor_type = ? AND question_key = ?", userID, riskFactorType, questionKey).Count(&count).Error
-	return count, err
-}
-
 func (r *GORMAttachmentRepository) FindOwned(ctx context.Context, fileID, userID, riskFactorType, questionKey string) (*application.UploadedFile, error) {
 	var model UploadedFileModel
 	err := r.db.WithContext(ctx).Where("file_id = ? AND user_id = ? AND risk_factor_type = ? AND question_key = ?", fileID, userID, riskFactorType, questionKey).First(&model).Error

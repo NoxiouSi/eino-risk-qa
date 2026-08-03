@@ -27,7 +27,8 @@ llm:
 
 storage:
   local_dir: "./data/uploads"
-  max_file_bytes: 10485760
+  max_file_bytes: 10485760 # 原始上传文件最大 10MB
+  max_stored_image_bytes: 1048576 # 压缩后存储及发送模型的图片不超过 1MB
   max_files_per_question: 5
   allowed_mime_types:
     - "image/jpeg"
