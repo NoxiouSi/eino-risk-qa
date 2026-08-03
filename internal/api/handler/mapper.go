@@ -47,7 +47,7 @@ func toQuestionItemDTOs(questions []application.QuestionNode) []dto.QuestionItem
 		result = append(result, dto.QuestionItem{
 			QuestionKey: question.QuestionKey, QuestionText: question.QuestionText,
 			AnswerType: question.AnswerType, Required: question.Required,
-			MinSubmitCount: question.MinSubmitCount, SortOrder: question.SortOrder,
+			MinSubmitCount: question.MinSubmitCount, MaxSubmitCount: question.MaxSubmitCount, SortOrder: question.SortOrder,
 		})
 	}
 	return result

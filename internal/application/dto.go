@@ -23,6 +23,7 @@ type QuestionNode struct {
 	AnswerType     string
 	Required       bool
 	MinSubmitCount int
+	MaxSubmitCount int
 	SortOrder      int
 	Skills         []SkillSpec
 	Children       []QuestionNode

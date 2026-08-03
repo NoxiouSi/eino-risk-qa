@@ -302,7 +302,7 @@ func buildQuestionSpecs(questions []QuestionNode) (map[string]QuestionNode, []ri
 		for _, skill := range question.Skills {
 			rules = append(rules, skill.RuleText)
 		}
-		specs = append(specs, riskfactor.QuestionSpec{QuestionKey: question.QuestionKey, QuestionText: question.QuestionText, AnswerType: question.AnswerType, Required: question.Required, MinSubmitCount: question.MinSubmitCount, Rules: rules})
+		specs = append(specs, riskfactor.QuestionSpec{QuestionKey: question.QuestionKey, QuestionText: question.QuestionText, AnswerType: question.AnswerType, Required: question.Required, MinSubmitCount: question.MinSubmitCount, MaxSubmitCount: question.MaxSubmitCount, Rules: rules})
 	}
 	return byKey, specs
 }
@@ -362,10 +362,14 @@ func (s *SessionAppService) resolveQuestionAnswer(ctx context.Context, userID st
 
 func (s *SessionAppService) validateFileAnswer(question QuestionNode, item riskfactor.QuestionAnswer) error {
 	if item.Text != "" || len(item.FileIDs) < question.MinSubmitCount {
-		return fmt.Errorf("question %s requires at least %d file(s)", item.QuestionKey, question.MinSubmitCount)
+		return fmt.Errorf("question %s requires at least %d file(s) when submitted", item.QuestionKey, question.MinSubmitCount)
 	}
-	if s.maxFilesPerQuestion > 0 && len(item.FileIDs) > s.maxFilesPerQuestion {
-		return fmt.Errorf("question %s exceeds maximum of %d files", item.QuestionKey, s.maxFilesPerQuestion)
+	maxFiles := question.MaxSubmitCount
+	if maxFiles <= 0 || s.maxFilesPerQuestion > 0 && s.maxFilesPerQuestion < maxFiles {
+		maxFiles = s.maxFilesPerQuestion
+	}
+	if maxFiles > 0 && len(item.FileIDs) > maxFiles {
+		return fmt.Errorf("question %s exceeds maximum of %d files", item.QuestionKey, maxFiles)
 	}
 	if s.attachments == nil {
 		return errors.New("attachment repository is not configured")

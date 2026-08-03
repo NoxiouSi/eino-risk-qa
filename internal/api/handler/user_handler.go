@@ -45,7 +45,7 @@ func (h *UserHandler) GetMainQuestions(ctx context.Context, c *app.RequestContex
 	for _, item := range result.Items {
 		questions := make([]dto.QuestionItem, 0, len(item.Questions))
 		for _, question := range item.Questions {
-			questions = append(questions, dto.QuestionItem{QuestionKey: question.QuestionKey, QuestionText: question.QuestionText, AnswerType: question.AnswerType, Required: question.Required, MinSubmitCount: question.MinSubmitCount, SortOrder: question.SortOrder})
+			questions = append(questions, dto.QuestionItem{QuestionKey: question.QuestionKey, QuestionText: question.QuestionText, AnswerType: question.AnswerType, Required: question.Required, MinSubmitCount: question.MinSubmitCount, MaxSubmitCount: question.MaxSubmitCount, SortOrder: question.SortOrder})
 		}
 		items = append(items, dto.MainQuestionItem{RiskFactorType: string(item.RiskFactorType), MainQuestion: item.MainQuestion, Questions: questions})
 	}

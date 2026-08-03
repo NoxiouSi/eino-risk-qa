@@ -9,6 +9,7 @@ type QuestionSpec struct {
 	AnswerType     string
 	Required       bool
 	MinSubmitCount int
+	MaxSubmitCount int
 	Rules          []string
 }
 
@@ -37,7 +38,7 @@ type JudgeInput struct {
 type RiskJudger interface {
 	// Judge 同步判断：输入完整上下文，输出一次结构化判断。
 	Judge(ctx context.Context, input JudgeInput) (*JudgementResult, error)
-	// JudgeStream 流式判断：持续产出 message_delta 事件（追问问题的真实逐字增量，或终态收尾话术），
+	// JudgeStream 流式判断：仅在需要补充资料时持续产出追问文本的 message_delta；
 	// channel 关闭前必发出一条 Type=StreamEventResult 或 Type=StreamEventError 的终止事件。
 	JudgeStream(ctx context.Context, input JudgeInput) (<-chan JudgeStreamEvent, error)
 }

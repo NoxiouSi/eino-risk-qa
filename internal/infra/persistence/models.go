@@ -24,6 +24,7 @@ type RiskFactorQuestionModel struct {
 	AnswerType     string    `gorm:"column:answer_type;size:16;not null"`
 	Required       bool      `gorm:"column:required;not null"`
 	MinSubmitCount int       `gorm:"column:min_submit_count;not null"`
+	MaxSubmitCount int       `gorm:"column:max_submit_count;not null"`
 	SortOrder      int       `gorm:"column:sort_order;not null"`
 	Enabled        bool      `gorm:"column:enabled;not null"`
 	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime"`

@@ -5,6 +5,7 @@ import QAFormCard from './components/QAFormCard.vue'
 import SessionCard from './components/SessionCard.vue'
 import DebugPanel from './components/DebugPanel.vue'
 import { getBatch, getMainQuestions, submitBatch, submitBatchStream, submitFollowUp, submitFollowUpStream } from './api/client'
+import { riskFactorTypeLabel } from './types'
 import type { ChatBubble, MainQuestionItem, QuestionAnswerDTO, QuestionDraft, QuestionDraftMap, QuestionItem, QuestionJudgementDTO, SessionDetailDTO, SessionResultDTO, SSEEvent } from './types'
 
 interface SessionCardState {
@@ -72,7 +73,6 @@ function applyResult(card: SessionCardState, result: SessionResultDTO) {
   if (result.status === 'processing') {
     card.followUpQuestion = result.message
   } else {
-    card.bubbles.push({ role: 'system', text: result.message })
     card.followUpQuestion = ''
   }
 }
@@ -104,9 +104,14 @@ const answerDrafts = reactive<Record<string, QuestionDraftMap>>({})
 function createDraftMap(questions: QuestionItem[]): QuestionDraftMap {
   return Object.fromEntries(questions.map((question) => [question.question_key, { text: '', fileIds: [], fileNames: [] }]))
 }
-function draftComplete(question: QuestionItem, draft?: QuestionDraft): boolean {
-  if (!draft || draft.uploading) return false
-  return question.answer_type === 'text' ? draft.text.trim().length > 0 : draft.fileIds.length >= question.min_submit_count
+function draftValid(question: QuestionItem, draft?: QuestionDraft): boolean {
+  if (draft?.uploading) return false
+  if (question.answer_type === 'text') {
+    return !question.required || Boolean(draft?.text.trim())
+  }
+  const count = draft?.fileIds.length ?? 0
+  if (count === 0) return !question.required
+  return count >= question.min_submit_count && count <= question.max_submit_count
 }
 function toAnswers(questions: QuestionItem[], drafts: QuestionDraftMap): QuestionAnswerDTO[] {
   const answers: QuestionAnswerDTO[] = []
@@ -121,7 +126,7 @@ function toAnswers(questions: QuestionItem[], drafts: QuestionDraftMap): Questio
 function summarizeDrafts(questions: QuestionItem[], drafts: QuestionDraftMap): string {
   return questions.map((question) => question.answer_type === 'text' ? `${question.question_text}：${drafts[question.question_key]?.text ?? ''}` : `${question.question_text}：已提交${drafts[question.question_key]?.fileIds.length ?? 0}个文件`).join('\n')
 }
-const allAnswered = computed(() => qaItems.value.length > 0 && qaItems.value.every((item) => item.questions.filter((q) => q.required).every((q) => draftComplete(q, answerDrafts[item.risk_factor_type]?.[q.question_key]))))
+const allAnswered = computed(() => qaItems.value.length > 0 && qaItems.value.every((item) => item.questions.every((question) => draftValid(question, answerDrafts[item.risk_factor_type]?.[question.question_key]))))
 
 async function handleStart() {
   questionsError.value = ''
@@ -199,9 +204,17 @@ function pendingQuestions(session: SessionCardState): QuestionItem[] {
 }
 const pendingSessionsAnalyzing = computed(() => pendingSessions.value.some((session) => session.generating))
 const waitingForBatchResults = computed(() => submittingBatch.value && sessionOrder.value.length < qaItems.value.length)
+const completedSessionLabels = computed(() => {
+  const hasConfirmedSupplementRequest = pendingSessions.value.some((session) => session.status === 'processing' && !session.generating)
+  if (!hasConfirmedSupplementRequest) return []
+  return sessionOrder.value
+    .map((id) => sessions[id])
+    .filter((session) => session.status === 'cleared' || session.status === 'not_cleared')
+    .map((session) => riskFactorTypeLabel(session.riskFactorType))
+})
 const allFollowUpAnswered = computed(() => pendingSessions.value.length > 0 && pendingSessions.value.every((session) => {
   const questions = pendingQuestions(session)
-  return !session.generating && questions.length > 0 && questions.filter((q) => q.required).every((q) => draftComplete(q, followUpDrafts[session.sessionId]?.[q.question_key]))
+  return !session.generating && questions.length > 0 && questions.every((question) => draftValid(question, followUpDrafts[session.sessionId]?.[question.question_key]))
 }))
 
 const allSessionsDone = computed(() =>
@@ -367,7 +380,6 @@ function restoreSessionCard(session: SessionDetailDTO): SessionCardState {
   card.questionJudgements = session.question_judgements ?? []
   if (session.error) card.errorMessage = session.error.message
   else if (session.status === 'processing') card.followUpQuestion = session.message
-  else card.bubbles.push({ role: 'system', text: session.message })
   return card
 }
 
@@ -480,9 +492,14 @@ async function handleQueryBatch() {
 
           <template v-if="pendingSessions.length">
             <div v-if="pendingSessionsAnalyzing" class="hint-bubble">正在分析其余资料，请稍候…</div>
-            <div v-else class="hint-bubble">
-              审核后发现仍有 {{ pendingSessions.length }} 个风险要素需要补充资料，请填写下方缺失内容后统一提交：
-            </div>
+            <template v-else>
+              <div v-if="completedSessionLabels.length" class="hint-bubble">
+                {{ completedSessionLabels.join('、') }}已完成，无需继续补充。
+              </div>
+              <div class="hint-bubble">
+                审核后发现仍有 {{ pendingSessions.length }} 个风险要素需要补充资料，请填写下方缺失内容后统一提交：
+              </div>
+            </template>
             <QAFormCard
               v-for="s in pendingSessions"
               :key="s.sessionId"

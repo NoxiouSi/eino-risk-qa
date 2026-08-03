@@ -1,5 +1,35 @@
-# Vue 3 + TypeScript + Vite
+# 风险审核调试前端
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+Vue 3 + TypeScript + Vite 调试页面，用于验证统一问题树、结构化答案、多图片上传、批量审核、SSE追问和批次恢复。
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+## 环境
+
+- Node.js 20.19+ 或 22.12+
+- 后端服务监听 `http://127.0.0.1:8080`
+- 数据库已执行 `migrations/0001` 至 `0004`
+
+## 启动
+
+```bash
+npm install
+npm run dev
+```
+
+访问 `http://localhost:5173/`。开发服务器会把 `/api` 代理到后端。
+
+## 当前交互规则
+
+- 从 `GET /api/v1/users/{user_id}/main-questions` 获取层级问题配置。
+- 身份证图片必填且限 1 张。
+- 资金来源、交易场景图片证据选填；提交时允许 1–5 张。
+- 图片上传后由服务端压缩为不超过 1MB 的 JPEG，再用于存储和视觉模型审核。
+- 首轮和追问均通过 `answers[]` 按 `question_key` 结构化提交。
+- SSE 流式开关位于“调试信息”抽屉，默认开启。
+- 可输入 `batch_id` 恢复用户、问题树、历史记录、缺失项和追问表单。
+- 单个风险要素完成不显示独立收尾气泡；全部风险要素完成后只显示“审核结果将在3个工作日内推送给您”。
+
+## 验证
+
+```bash
+npm run build
+```

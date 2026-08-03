@@ -6,6 +6,7 @@ type QuestionItem struct {
 	AnswerType     string `json:"answer_type"`
 	Required       bool   `json:"required"`
 	MinSubmitCount int    `json:"min_submit_count"`
+	MaxSubmitCount int    `json:"max_submit_count"`
 	SortOrder      int    `json:"sort_order"`
 }
 

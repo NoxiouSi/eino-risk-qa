@@ -9,6 +9,7 @@ export interface QuestionItem {
   answer_type: 'text' | 'image' | 'file'
   required: boolean
   min_submit_count: number
+  max_submit_count: number
   sort_order: number
 }
 

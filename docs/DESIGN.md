@@ -2,17 +2,17 @@
 
 ## 用户需求
 
-基于 eino 框架（Go, CloudWeGo）构建一个"风险要素合理怀疑排除"服务，整体遵循领域驱动设计（DDD）。批量提交一个用户名下多个风险要素（如身份、资金来源），每个要素含主问题与用户回答；LLM 对每个要素分别判断回答的**完整性**与**合理性**两个独立维度。若信息不完整，则针对缺失点生成追问，等待用户通过专门接口提交追问回答，每要素最多追问 3 次；一旦完整性满足即结束追问循环（不再因合理性问题继续追问），最终结合两个维度给出"是否排除合理怀疑"的结论、终止原因及提取到的结构化信息。
+基于 Eino（Go, CloudWeGo）构建“风险要素合理怀疑排除”服务，遵循DDD。批量处理一个用户名下多个风险要素（身份、资金来源、交易场景）；每个风险要素由group主问题和可配置子问题组成，用户按`question_key`提交结构化文本或图片答案，LLM对每个子问题分别判断**完整性**与**合理性**。若信息不完整，则针对缺失点生成追问，等待用户通过专门接口提交追问回答，每要素最多追问 3 次；一旦完整性满足即结束追问循环（不再因合理性问题继续追问），最终结合两个维度给出"是否排除合理怀疑"的结论、终止原因及提取到的结构化信息。
 
 ## 产品概览
 
-面向风控/尽调场景：批量提交一个用户名下多个风险要素（如身份、资金来源），每个要素含主问题与用户回答；LLM 对每个要素分别判断回答的**完整性**（信息是否已全部覆盖）与**合理性**（内容是否可信、无矛盾）。若信息不完整，则针对缺失点生成追问，等待用户通过专门接口提交追问回答，每要素最多追问 3 次；一旦完整性满足即结束追问循环（不再因合理性问题继续追问），最终结合两个维度给出"是否排除合理怀疑"的结论、终止原因及提取到的结构化信息。项目升级为**全栈**：后端提供标准化的 HTTP 接口契约（含流式响应能力）、数据层设计；前端提供一个轻量对话页面，用于开发调试上述批量提交/追问问答全流程（非面向最终业务用户的正式产品界面）。
+面向风控/尽调场景：按统一问题配置批量提交身份、资金来源、交易场景等风险要素的结构化文本和图片答案；LLM根据问题关联的Skill逐项判断**完整性**（必填资料是否覆盖）与**合理性**（内容是否可信、一致、无明显篡改）。若信息不完整，则针对缺失点生成追问，等待用户通过专门接口提交追问回答，每要素最多追问 3 次；一旦完整性满足即结束追问循环（不再因合理性问题继续追问），最终结合两个维度给出"是否排除合理怀疑"的结论、终止原因及提取到的结构化信息。项目升级为**全栈**：后端提供标准化的 HTTP 接口契约（含流式响应能力）、数据层设计；前端提供一个轻量对话页面，用于开发调试上述批量提交/追问问答全流程（非面向最终业务用户的正式产品界面）。
 
-**对用户可见的对话体验按会话与批次分层收敛**：用户提交回答后，前端先展示“正在分析中……”；单个风险要素仍需追问时，其`message`为缺失资料提示并支持真实逐字流式展示；单个风险要素终态仅返回“该项资料无需继续补充”，不得提前输出全局收尾文案。前端聚合本批次全部风险要素状态：存在`processing`或`llm_error`时提示用户补充资料或重试；只有预期的全部风险要素结果到齐且均已终止时，才统一显示“审核结果将在3个工作日内推送给您”。
+**对用户可见的对话体验按会话与批次分层收敛**：用户提交回答后，前端先展示“正在分析中……”；单个风险要素仍需追问时，其`message`为缺失资料提示并支持真实逐字流式展示；单个风险要素终态仅更新内部状态，不单独显示完成气泡。若批次中同时存在已完成项和确需补充资料的项，前端才展示已完成项摘要；只有预期的全部风险要素结果到齐且均已终止时，才单独显示“审核结果将在3个工作日内推送给您”。
 
 ## 统一问题配置与证据审核
 
-风险要素表单采用“风险要素 → `group`主问题 → 可回答子问题 → 审核Skill”结构。`risk_factor_questions`统一保存主问题和子问题：主问题的`answer_type=group`且不直接回答，子问题以风险要素内唯一的`question_key`标识，支持`text/image/file`、必填、最少提交数、排序和启停。`identity`、`fund_source`、`transaction_scene`分别配置身份、资金来源和交易场景资料。
+风险要素表单采用“风险要素 → `group`主问题 → 可回答子问题 → 审核Skill”结构。`risk_factor_questions`统一保存主问题和子问题：主问题的`answer_type=group`且不直接回答，子问题以风险要素内唯一的`question_key`标识，支持`text/image/file`、必填/选填、最少与最多提交数、排序和启停。`identity`、`fund_source`、`transaction_scene`分别配置身份、资金来源和交易场景资料。
 
 `audit_skills`独立保存可运营审核规则，`question_skill_refs`支持问题与Skill多对多引用；LLM Prompt按引用顺序动态组合规则。Tool Calling返回`items[]`逐问题判断，领域层根据全部必填问题执行AND聚合，模型漏项按不完整处理，响应返回`missing_question_keys`和`question_judgements`。
 
@@ -30,19 +30,19 @@ erDiagram
     RISK_FACTOR_SESSIONS ||--o{ QA_RECORDS : session_id
 ```
 
-迁移`0003_unify_risk_factor_questions`通过`INSERT ... SELECT`把旧`risk_factor_main_questions`迁为`group`节点，写入三类风险要素的子问题与Skill seed，随后删除旧表以避免双写；Down迁移先恢复旧主问题表再移除新增结构。
+迁移`0003_unify_risk_factor_questions`通过`INSERT ... SELECT`把旧`risk_factor_main_questions`迁为`group`节点，写入三类风险要素的子问题与Skill seed，随后删除旧表以避免双写；Down迁移先恢复旧主问题表再移除新增结构。迁移`0004_optional_multi_image_evidence`新增`max_submit_count`，并把资金来源、交易场景图片证据调整为选填且允许1–5张。
 
 ### 新版接口契约摘要
 
-- `GET /api/v1/users/{user_id}/main-questions`：每项返回`main_question`及`questions[]`（`question_key/question_text/answer_type/required/min_submit_count/sort_order`），不返回Skill规则。
+- `GET /api/v1/users/{user_id}/main-questions`：每项返回`main_question`及`questions[]`（`question_key/question_text/answer_type/required/min_submit_count/max_submit_count/sort_order`），不返回Skill规则。
 - `POST /api/v1/attachments`：`multipart/form-data`字段为`user_id/risk_factor_type/question_key/file`，返回`file_id/original_name/mime_type/size_bytes`。
 - `POST /api/v1/batches`：每个风险要素提交`answers: [{question_key,text? ,file_ids?}]`；文本与文件引用互斥。
 - `POST /api/v1/sessions/{session_id}/answers`：追问使用同一`answers`结构；前端仅提交`missing_question_keys`对应问题。
-- 会话响应新增`missing_question_keys`和`question_judgements`；同步与SSE最终`result`结构保持一致。
+- 同步会话响应和批次查询包含`missing_question_keys`与`question_judgements`；当前SSE `result`只包含会话核心状态、文案和提取信息，追问表单由流式文案及后续批次查询恢复。
 
 ## 核心功能
 
-- 批量提交用户 + 多个风险要素（主问题+回答），各要素独立并发首轮判断
+- 批量提交用户及多个风险要素的`answers[]`，各要素独立并发进行逐问题首轮判断
 - 单个风险要素追问回答提交接口（按 session 定位，仅 Processing 状态可提交）
 - 批次/会话状态与历史问答查询接口
 - 完整性驱动追问循环（≤3轮），合理性仅参与终态结论合成、不驱动追问
@@ -52,39 +52,39 @@ erDiagram
 - 全过程持久化，业务状态机作为领域核心知识内聚在领域层，LLM调用与Prompt模板经依赖倒置下沉到基础设施层
 - **流式输出**：批量首轮提交、追问回答提交两个触发LLM调用的接口支持以 SSE（Server-Sent Events）方式真正逐字流式展示"下一句对用户说的话"，默认仍保留同步JSON响应以兼容既有调用方
 - **调试前端**：提供一个简单的单页对话调试页面，可视化发起批量问答、查看/输入追问、观察流式增量输出与最终结论，用于开发期功能验证
-- **对话消息统一收敛（`message`）**：后端不再对外暴露"是否有追问问题"这一判断分支给前端；未到终态时 `message` 即追问问题文本，到达任意终态（Cleared/NotCleared）时 `message` 统一为固定收尾话术，由领域层聚合根统一推导，前端仅需渲染该字段并据 `status` 决定对话是否结束
+- **会话与批次文案分层**：`processing`会话的`message`为追问文本；单会话终态只更新内部状态。部分完成时显示完成项摘要；整个批次完成时仅显示“审核结果将在3个工作日内推送给您”
 
 ## 技术栈
 
-- 语言：Go 1.21+
+- 语言：Go 1.26.4（以`go.mod`为准）
 - LLM框架：CloudWeGo `eino` + `eino-ext`（ChatModel Provider可插拔适配，已支持 `mock`（本地/CI固定规则模拟）、`openai`（通用兼容协议）、`ark`（火山引擎 Ark OpenAI 兼容接口，负责图片审核）、`deepseek`（官方组件，负责文本审核））
 - Web框架：Hertz（CloudWeGo同生态，高性能、原生流式支持，errgroup并发调用友好）
-- ORM：GORM + golang-migrate（正式迁移脚本）
+- ORM：GORM；数据库变更使用`migrations/*.up.sql`/`*.down.sql`顺序迁移（可由MySQL客户端或golang-migrate执行）
 - 数据库：MySQL 8.x
 - 配置：Viper
 - 并发：golang.org/x/sync/errgroup
-- 流式传输：SSE（`text/event-stream`），Hertz 侧通过 `ctx.SetBodyStreamWriter` 分块写出（或引入 `hertz-contrib/sse`）
+- 流式传输：SSE（`text/event-stream`），Handler通过`io.Pipe`与Hertz `Response.SetBodyStream`持续写出事件帧
 - 前端（调试页面）：Vue 3 + TypeScript + Vite（轻量、组件化，便于管理多个风险要素并行对话卡片），开发态通过 Vite Dev Server 代理到后端；不引入状态管理框架/UI组件库，保持调试工具的最小依赖
 
 ## 架构风格：DDD + 端口与适配器（Hexagonal）
 
-核心原则：**领域层零框架依赖，业务规则（状态机、对用户展示文案的推导规则）内聚在领域层；LLM调用与Prompt构建通过依赖倒置下沉为基础设施层，实现领域层定义的端口接口**。
+核心原则：**领域层零框架依赖，单风险要素状态机和单会话文案推导内聚在领域层；LLM调用与Prompt构建通过依赖倒置下沉到基础设施层。跨会话的批次展示由前端基于API结果聚合，不反向污染领域模型。**
 
 ### 分层说明
 
 - **domain（领域层）**：`internal/domain/riskfactor/`。不 import eino、不 import gorm。包含：
   - 聚合根 `RiskFactorSession`：封装状态机全部规则（转移条件、轮次校验、终态判定、提取信息合并、**对外展示文案`UserMessage()`推导**），是"核心领域知识"载体，提供领域方法驱动状态迁移，不对外暴露可绕过规则的字段直接赋值。
-  - 值对象：`JudgementResult`（Completeness/Reasonableness/FollowUpQuestion/ExtractedInfo/ReasoningSummary）、`QAPair`、`RiskFactorType`、`SessionStatus`、`TerminationReason` 枚举。
+  - 值对象：`JudgementResult`（含逐问题`Questions`和`MissingQuestions`）、`QuestionJudgement`、`QuestionAnswer`、`QAPair`、`RiskFactorType`、`SessionStatus`、`TerminationReason`。
   - 领域常量：`SessionCompletedMessage`用于单风险要素终态，`BatchClosingMessage`仅用于全部风险要素完成后的批次收尾。
   - 端口（domain定义，infra实现）：`RiskJudger`（LLM判断能力抽象）、`SessionRepository`（持久化能力抽象）。
   - 领域事件（可选，供审计）：`SessionCleared`/`SessionNotCleared`/`FollowUpRequested`。
-- **application（应用层）**：`internal/application/`。仅编排：加载聚合→调用`RiskJudger`端口获取判断→调用聚合领域方法完成状态迁移→通过`SessionRepository`端口落库，事务边界在此层控制。不包含业务规则本身。含 `BatchAppService`（批量创建+errgroup并发调度首轮判断）、`SessionAppService`（首次提交/追问提交两个用例）。
+- **application（应用层）**：编排批次、会话、用户问题树、附件归属和结构化答案校验；调用领域状态机并通过仓储端口落库。批次用`errgroup`并发处理风险要素；会话保存的数据库事务由仓储适配器封装。
 - **infra（基础设施层）**：
   - `internal/infra/llm/`：ChatModel工厂（按provider分发eino-ext组件）、Prompt/ChatTemplate构建（系统提示词+风险要素类型+历史问答拼装）、结构化输出Tool Schema定义与解析重试、`JudgerAdapter`实现`domain.RiskJudger`（含基于增量Tool Call参数的追问文本真流式提取，详见"流式输出设计"）。
   - `internal/infra/persistence/`：GORM实体定义（与domain聚合做双向映射，不直接复用domain结构体）、实现`domain.SessionRepository`（含乐观锁+事务）。
 - **api（接口层）**：`internal/api/`。Hertz路由、Handler、DTO，调用application层用例，不下沉业务逻辑；响应中的`message`字段直接取自`RiskFactorSession.UserMessage()`，api层不重复实现该推导规则；同时承载SSE流式响应的写出（详见"流式输出设计"章节）。
 - **config/main**：配置加载 + `cmd/server/main.go` 手动依赖组装（infra实现→注入application→注入api handler），无需额外DI框架。
-- **web（前端调试页面）**：`web/`。独立的前端工程（与Go module平级），仅用于开发期功能调试，不属于DDD分层范畴，通过HTTP直接消费api层接口；只渲染`message`+`status`，不基于其他字段自行判断展示文案。
+- **web（前端调试页面）**：独立HTTP客户端。除渲染`message/status`外，还使用`questions/missing_question_keys/question_judgements`构建动态表单和调试信息，并聚合全部会话状态决定批次级收尾文案。
 
 依赖方向：api → application → domain(端口接口) ← infra(实现端口)。infra依赖domain定义的接口类型，domain完全不依赖infra，实现依赖倒置。web前端独立于后端分层，仅作为api层的HTTP客户端。
 
@@ -99,8 +99,8 @@ erDiagram
   - completeness=false & round<3 → 非终态，继续Processing，携带follow_up_question
 - **对外展示文案分层规则**：
   - `Status == Processing`（非终态） → `UserMessage()`返回本轮`follow_up_question`，提示具体需要补充的资料。
-  - `Status ∈ {Cleared, NotCleared}` → 单会话`UserMessage()`返回`SessionCompletedMessage`（“该项资料无需继续补充”），只表示该风险要素退出追问。
-  - 批次收尾由前端聚合预期风险要素数量和全部会话状态；仅当结果全部到齐且没有`processing/llm_error`时显示`BatchSessionCompletedMessage`语义（“审核结果将在3个工作日内推送给您”）。SSE终态单会话不发送收尾`message_delta`。
+  - `Status ∈ {Cleared, NotCleared}` → 单会话响应保留`SessionCompletedMessage`语义供调用方识别，但前端只更新内部状态，不生成完成气泡。
+  - 批次中仍有确认需要补充资料的风险要素时，前端可集中显示已完成项摘要；结果全部到齐且没有`processing/llm_error`时，只显示`BatchClosingMessage`（“审核结果将在3个工作日内推送给您”）。SSE终态单会话不发送收尾`message_delta`。
 
 ## 状态机设计（domain层聚合根RiskFactorSession内实现，非分散在application/api）
 
@@ -135,78 +135,56 @@ stateDiagram-v2
 - 日志：不打印用户回答原文全文，仅记录session_id/batch_id/round/status/耗时。
 - LLM调用失败/解析失败：进入LLMError，允许同轮重试（不消耗round），最终仍失败需在响应中如实返回错误。
 - 批量接口单要素失败不应导致整批失败，返回每要素独立status/error。
-- "新增QA记录"与"更新session状态/轮次"须在同一事务内完成（application层控制事务边界，通过SessionRepository端口的事务方法或Unit of Work模式）。
+- “新增QA记录/结构化提交”与“更新session状态/轮次”由`GORMSessionRepository.Save`在同一GORM事务内完成，并通过乐观锁`version`检测并发更新。
 - extracted_info合并逻辑（跨轮次字段级合并）应实现为domain值对象上的方法（如`JudgementResult.MergeInto(existing map)`），保持规则内聚。
 - `message`字段不落库存储（终态文案是常量、非终态文案即已持久化的`follow_up_question`），`RiskFactorSession.UserMessage()`是基于已有字段（`Status`+最新`follow_up_question`）的**运行时推导**，避免数据冗余与不一致。
 
 ## 流式输出设计
 
-### 设计目标与范围
+### 目标与边界
 
-批量首轮提交、追问回答提交两个会触发LLM调用的接口，均需支持**流式输出**：客户端提交回答后先本地展示"正在分析中……"（纯前端loading态，无需等待后端事件），随后服务端将**本轮`message`文案**——即追问问题文本（非终态）或固定收尾话术（终态）——以SSE方式返回；其中追问问题文本要求**真正逐字/逐token流式**展示（而非笼统的"思考中"占位文案），流结束时携带完整的结构化判断结果用于前端展示辅助信息（如已提取字段）。同步（非流式）JSON响应模式保持不变、继续保留，供不需要流式体验的调用方使用（如批处理脚本）；流式为可选增强，通过请求参数开关。
+`POST /api/v1/batches`和`POST /api/v1/sessions/{session_id}/answers`均支持`stream`开关。同步模式返回JSON；流式模式返回`text/event-stream`。前端提交后先展示本地分析状态，只有需要补充资料时才把模型生成的追问通过`message_delta`逐步显示；单个风险要素到达终态时不发送收尾增量。批次级文案“审核结果将在3个工作日内推送给您”由前端在全部预期会话结果到齐且均已终止后统一展示。
 
-### 分层影响与依赖倒置的延续
+流式传输不改变领域状态机：`RiskJudger`最终仍产出完整`JudgementResult`，application层收到最终结果后执行与同步路径相同的状态迁移和持久化。`JudgerAdapter`通过增量扫描工具调用参数中的`follow_up_question`提取追问文本；扫描逻辑不依赖JSON字段顺序，并兼容Provider输出中的空白差异。同步与流式调用均受`llm.request_timeout_seconds`控制，默认300秒。
 
-**关键原则：流式仅是"传输/交互体验"层面的能力，不改变domain层的核心契约。** domain聚合根`RiskFactorSession`的状态迁移方法（`SubmitInitialAnswer`/`SubmitFollowUpAnswer`）签名不变，始终只接受一个**完整的、最终的**`JudgementResult`来驱动状态机；`UserMessage()`同样是在拿到完整状态后才调用的运行时推导方法，不关心`follow_up_question`是被一次性拿到还是逐token拼接得到。流式能力的落点在 **infra/llm 层**（如何从ChatModel获取真正的token级增量并转发）与 **application/api 层**（如何把这个流转发给HTTP客户端并在流结束后调用domain方法），domain层零改动。
-
-- **domain层**：不变。`RiskJudger`端口新增流式方法（见下），但`RiskFactorSession`状态机方法与`UserMessage()`只消费/推导最终值。
-- **infra/llm层（关键技术点：如何让"追问问题"本身真正逐字流出）**：本方案沿用Tool/Function Calling方式获取结构化输出（completeness/reasonableness/extracted_info/follow_up_question均为同一个工具调用的参数字段），但为了让`follow_up_question`能被逐字流式转发给用户，**不能等整段工具调用参数JSON拼接完成后再整体反序列化**（那样只能在流末尾一次性产出，等同于旧方案的限制），而是采用以下技术方案：
-  1. eino ChatModel 的流式调用（`Stream()`）对于绑定了工具调用的场景，多数OpenAI兼容Provider会将工具调用参数（`arguments`）以字符串增量（chunk）的形式持续推送，而不是一次性给出完整JSON；
-  2. `JudgerAdapter`内维护一个**增量JSON扫描器**（轻量的、容忍未闭合JSON的流式解析器，或按约定的字段顺序做简单的括号/引号计数），随着`arguments`字符串不断增长，一旦扫描器识别出`follow_up_question`字段的值已经开始输出（检测到该key的起始引号），就将后续每个新增的字符/词语作为`message_delta`事件转发给上层，直到该字符串字段闭合（识别到匹配的结束引号，不含转义边界）；
-  3. Prompt/Tool Schema 设计上约定`follow_up_question`字段放在JSON参数的**最后一个字段**（在`completeness`/`reasonableness`/`extracted_info`之后），这样当该字段开始输出时，其余结构化字段已经确定不再变化，简化增量扫描器的实现复杂度；
-  4. 若判断结果为终态（无论Cleared还是NotCleared），`follow_up_question`字段为空，不产生任何`message_delta`；此时`JudgerAdapter`在拿到完整的最终`JudgementResult`并结合`RiskFactorSession.UserMessage()`推导出的固定收尾话术后，直接以**一次性的单个`message_delta`事件**（内容为完整收尾话术）+ 紧随的`result`事件收尾，因为该文案是常量、无需也不必要模拟逐字过程；
-  5. 该增量扫描器是一个纯粹的infra层技术实现细节（不涉及业务规则），domain层完全不感知这一机制的存在。
-- **application层**：`SessionAppService`新增`SubmitInitialAnswerStream`/`SubmitFollowUpAnswerStream`用例方法，内部调用`RiskJudger.JudgeStream`拿到事件通道，将`message_delta`事件原样转发给上层；在收到最终`JudgementResult`后，执行与同步路径完全一致的逻辑：调用聚合根状态机方法完成状态迁移 → 调用`RiskFactorSession.UserMessage()`得到最终完整文案（用于终态场景的收尾话术，或与流式拼接结果做一致性校验）→ 通过`SessionRepository`端口持久化，事务边界不变。
-- **api层**：Handler 判断请求是否要求流式（见API契约），若是则将响应切换为`text/event-stream`，通过Hertz的`ctx.SetBodyStreamWriter`分块写出SSE事件，每个事件对应`session_id` + 事件类型，供前端按session路由渲染（批量提交场景下，一个HTTP流需承载N个风险要素并发产生的多路事件，靠`session_id`字段多路复用）。
-
-### RiskJudger 端口扩展（新增流式方法，不破坏既有同步方法）
+### 领域端口与应用事件
 
 ```go
-// internal/domain/riskfactor/ports.go
-type StreamEventType string
-
+// domain/riskfactor：模型原始流事件
 const (
-    StreamEventMessageDelta StreamEventType = "message_delta" // message(追问问题或收尾话术)的增量文本片段
-    StreamEventResult       StreamEventType = "result"         // 最终完整的结构化判断结果
+    StreamEventMessageDelta StreamEventType = "message_delta"
+    StreamEventResult       StreamEventType = "result"
     StreamEventError        StreamEventType = "error"
 )
 
 type JudgeStreamEvent struct {
-    SessionID    string           // 多路复用标识：批量场景下用于区分事件归属的风险要素
+    SessionID    string
     Type         StreamEventType
-    MessageDelta string           // Type=message_delta时的文本片段（追问问题的逐字片段，或终态时一次性给出的完整收尾话术）
-    Result       *JudgementResult // Type=result时的最终结构化结果，供上层驱动状态机与持久化
-    Err          error            // Type=error时的错误
+    MessageDelta string           // 仅用于追问文本增量
+    Result       *JudgementResult
+    Err          error
 }
 
-// JudgeInput 是调用RiskJudger所需的完整上下文（实现阶段修订：原方案用位置参数传递mainQuestion/history/
-// latestAnswer，实现时发现追问轮次下"本轮实际被回答的问题"既不等于MainQuestion也不在History中——History只包含
-// 已完成轮次，因此改为显式的CurrentQuestion字段，避免Prompt构建时上下文缺失）
-type JudgeInput struct {
-    SessionID       string         // 多路复用标识，同步调用可忽略
-    RiskFactorType  RiskFactorType
-    MainQuestion    string
-    History         []QAPair       // 已完成的历史问答（不含本轮）
-    CurrentQuestion string         // 本轮实际被回答的问题：首轮=MainQuestion，追问轮次=上一轮的follow_up_question
-    LatestAnswer    string
-}
-
-type RiskJudger interface {
-    Judge(ctx context.Context, input JudgeInput) (*JudgementResult, error)
-    // JudgeStream 流式版本：持续产出message_delta事件（追问问题的真实逐字增量，或终态收尾话术），channel关闭前必发出一条Type=result或Type=error的终止事件
-    JudgeStream(ctx context.Context, input JudgeInput) (<-chan JudgeStreamEvent, error)
-}
+// application：HTTP输出所需的完整事件集合
+const (
+    StreamEventBatchCreated StreamEventType = "batch_created"
+    StreamEventMessageDelta StreamEventType = "message_delta"
+    StreamEventResult       StreamEventType = "result"
+    StreamEventDone         StreamEventType = "done"
+    StreamEventError        StreamEventType = "error"
+)
 ```
 
-### SSE 事件帧格式
+`JudgeInput`携带`Questions[]`、结构化`Answers[]`、历史问答和历史逐问题判断。图片答案以受控本地路径传入infra层，由Eino多模态消息读取压缩后的JPEG并编码为Base64。
 
-统一采用标准 SSE 格式（`Content-Type: text/event-stream`），事件类型与语义如下：
+### SSE 事件契约
 
-- `message_delta`：`message`（对用户展示的文案：追问问题或收尾话术）的增量文本片段。非终态时为模型逐字生成的追问问题片段（真实流式）；终态时该事件只出现一次，内容为完整的固定收尾话术（无需分片，一次给出即可满足"显示"要求）。不含任何业务结论字段。
-- `result`：该风险要素本轮的最终结构化结果，字段与同步JSON响应的单项结构一致（`status`/`current_round`/`message`/`cleared`/`termination_reason`/`extracted_info`），其中`message`字段与`message_delta`拼接结果一致，供前端做兜底校验或直接使用完整值渲染；每个`session_id`在一次流中只出现一次。
-- `done`：该`session_id`的流式片段全部结束的显式标记（批量场景下需要，用于前端判断"这一路的事件不会再来了"，从而更新对应会话卡片的加载态，即使其它风险要素仍在生成中）。
-- `error`：该`session_id`对应的LLM调用/解析失败，`data`含`error_code`/`message`，等价于同步响应中的`status=llm_error`。
-- 整个HTTP流在**所有**风险要素（批量场景）都发出`done`或`error`后关闭连接。
+- `batch_created`：仅批量流式提交产生，`data`为`{"batch_id":"..."}`，前端据此记录可恢复的批次ID。
+- `message_delta`：只承载需要补充资料时的追问文本增量；单会话终态不产生该事件。
+- `result`：单个风险要素本轮最终结果，包含`session_id/risk_factor_type/status/current_round/message/cleared/termination_reason/extracted_info`。
+- `done`：该`session_id`本轮事件结束。
+- `error`：该`session_id`失败，包含`error_code/message`。
+- 批量场景中多个会话事件会交错到达；所有会话均`done`或`error`后HTTP流关闭。
 
 示例（非终态，追问问题真实逐字流出）：
 
@@ -245,17 +223,20 @@ graph TB
     subgraph API层
         R1[POST /api/v1/batches 批量首轮提交, 支持stream=true]
         R2[POST /api/v1/sessions/id/answers 追问回答提交, 支持stream=true]
-        R3[GET /api/v1/batches/id 批次查询]
+        R3[GET /api/v1/batches/id 批次查询与恢复]
         R4[GET /api/v1/sessions/id 会话详情查询]
-        SSE[SSE Writer: ctx.SetBodyStreamWriter 分块写出多路复用事件]
+        R5[GET /api/v1/users/id/main-questions 问题树]
+        R6[POST /api/v1/attachments 图片上传压缩]
+        SSE[SSE Writer: io.Pipe + Response.SetBodyStream]
     end
     subgraph Application层 用例编排
-        BAS[BatchAppService 并发调度]
-        SAS[SessionAppService 首轮/追问用例(同步+流式两套), 事务边界]
+        BAS[BatchAppService 并发调度与批次恢复]
+        SAS[SessionAppService 首轮/追问用例与结构化校验]
+        UAS[UserAppService 用户风险要素与问题树]
     end
     subgraph Domain层 核心领域知识
         AGG[RiskFactorSession 聚合根: 状态机+轮次+结论合成+UserMessage推导]
-        VO[值对象: JudgementResult/QAPair/SessionStatus]
+        VO[值对象: JudgementResult/QuestionJudgement/QuestionAnswer/QAPair]
         P1[[端口: RiskJudger Judge/JudgeStream]]
         P2[[端口: SessionRepository]]
     end
@@ -263,12 +244,14 @@ graph TB
         LLMA[JudgerAdapter: ChatModel工厂+Prompt模板+Tool Schema解析+增量参数扫描转发]
         PERSA[GORM Repository: 实体映射+乐观锁+事务]
     end
-    DB[(MySQL: users/batches/risk_factor_sessions/qa_records)]
+    DB[(MySQL: 运行数据 + 问题配置 + Skill + 附件元数据)]
 
     Client --> R1 --> BAS
     Client --> R2 --> SAS
-    Client --> R3 --> SAS
+    Client --> R3 --> BAS
     Client --> R4 --> SAS
+    Client --> R5 --> UAS
+    Client --> R6 --> PERSA
     R1 -.流式.-> SSE
     R2 -.流式.-> SSE
     SSE -.事件转发.-> Client
@@ -277,6 +260,7 @@ graph TB
     AGG --> VO
     SAS -.调用.-> P1
     SAS -.调用.-> P2
+    UAS --> PERSA
     LLMA -.实现.-> P1
     PERSA -.实现.-> P2
     PERSA --> DB
@@ -298,9 +282,9 @@ graph TB
 ```
 
 - **字段命名规范**：全部使用 snake_case，与Go结构体 `json:"xxx_yyy"` tag 一一对应；时间字段统一 ISO8601 字符串（如 `2026-07-23T10:00:00Z`）；枚举字段使用小写下划线字符串（如 `risk_factor_type: "identity"` / `"fund_source"`；`status: "processing"|"cleared"|"not_cleared"|"llm_error"`；`termination_reason: "unreasonable"|"max_rounds_incomplete"`）。
-- **鉴权方式**：当前阶段服务定位为内部风控系统间调用，无需完整用户登录体系，采用简单 API Key 鉴权：请求头 `X-API-Key: <key>`，由 api 层中间件统一校验，未通过返回 `401 UNAUTHORIZED`；后续如需更细粒度权限控制，可在此中间件位置扩展，不影响下层设计。
-- **流式响应触发方式**：请求体新增可选字段 `stream`（bool，默认`false`）。`stream=false`（默认）走原有同步JSON响应；`stream=true`时，响应`Content-Type`变为`text/event-stream`，按"流式输出设计"章节的SSE事件帧格式返回，HTTP状态码仍为200（若鉴权失败等前置校验错误，则在建立流之前以标准JSON错误响应返回，不进入流模式）。
-- **对话展示字段说明（重要）**：响应体中的 `message` 字段是**唯一**用于对用户展示的文案，由后端统一推导产出（详见"判断维度拆分与结论合成"章节的`UserMessage()`规则），不区分是否存在追问——非终态时为追问问题文本，终态时统一为固定收尾话术。调用方/前端**不应**再依赖某个"是否有追问"的布尔字段或`follow_up_question`是否为空来决定展示内容；是否需要继续展示追问输入框，应根据 `status` 字段是否为 `processing` 来判断（与`message`内容展示是两个独立关注点）。
+- **鉴权方式**：当`auth.api_key`非空时，请求必须携带`X-API-Key: <key>`；为空时禁用鉴权，便于本地调试。鉴权失败返回`401 UNAUTHORIZED`。
+- **流式响应触发方式**：请求体可选`stream`（bool，默认`false`）。`true`时返回SSE；前置参数或鉴权失败仍返回标准JSON错误，不建立SSE连接。前端调试面板中的流式开关默认开启。
+- **会话与批次文案**：单会话`message`在`processing`时为追问，在终态时为“该项资料无需继续补充。”；前端不把单项终态消息渲染成气泡。只有整个批次全部结束时，前端才展示“审核结果将在3个工作日内推送给您”。部分完成、部分待补充时，前端显示完成项摘要和统一补充资料表单。
 
 ### 错误码与 HTTP 状态码映射表
 
@@ -312,7 +296,7 @@ graph TB
 | BATCH_NOT_FOUND | 404 | batch_id 不存在 |
 | SESSION_NOT_PROCESSING | 409 | 对非Processing状态的session提交追问回答 |
 | USER_NOT_FOUND | 404 | user_id 不存在（查询主问题接口：用户风险项为预配置业务数据，不存在时不自动创建） |
-| LLM_JUDGE_FAILED | 502 | LLM调用/结构化输出解析最终失败（重试后仍失败） |
+| LLM_JUDGE_FAILED | 200内单项错误 / SSE `error` | LLM调用或结构化解析失败；同步批量/追问以`status=llm_error`和`error`表达，已建立的SSE以`error`事件表达 |
 | INTERNAL_ERROR | 500 | 未预期的内部错误（如DB写入异常） |
 
 ### 1. POST /api/v1/batches — 批量首轮提交
@@ -325,26 +309,39 @@ graph TB
   "risk_factors": [
     {
       "risk_factor_type": "identity",
-      "main_question": "请说明您的身份信息及职业背景",
-      "answer": "我是XX公司的财务经理..."
+      "answers": [
+        {"question_key": "real_name", "text": "张三"},
+        {"question_key": "id_card_number", "text": "110101199001011234"},
+        {"question_key": "id_card_image", "file_ids": ["file-id-card"]}
+      ]
     },
     {
       "risk_factor_type": "fund_source",
-      "main_question": "请说明本次资金的来源",
-      "answer": "资金来源于..."
+      "answers": [
+        {"question_key": "fund_source_description", "text": "工资收入"},
+        {"question_key": "fund_source_evidence", "file_ids": ["file-bank-1", "file-bank-2"]}
+      ]
+    },
+    {
+      "risk_factor_type": "transaction_scene",
+      "answers": [
+        {"question_key": "transaction_description", "text": "购买办公设备"}
+      ]
     }
   ],
   "stream": false
 }
 ```
 
-字段说明：`user.user_id`必填；`risk_factors`数组，每项`risk_factor_type`（枚举：identity/fund_source等，可扩展）、`main_question`、`answer`均必填，为空则返回`INVALID_PARAM`；`stream`可选，默认`false`，为`true`时以SSE流式返回（见下）。
+`user.user_id`和非空`risk_factors`必填。每个风险要素使用`answers[]`提交结构化答案；每项必须有`question_key`，且`text`与`file_ids`二选一。身份证图片必填且限1张；资金来源和交易场景图片证据选填，可完全省略，提交时允许1–5张。后端还会校验问题归属、重复`question_key`、重复`file_id`、文件归属和部署级安全上限。`main_question/answer`仅保留给存量客户端兼容，不是推荐契约。
 
 响应体（`stream=false`，HTTP 200，单要素失败不影响整批）：
 
 ```json
 {
   "batch_id": "batch_20260723_001",
+  "user_id": "u_1001",
+  "user_name": "张三",
   "created_at": "2026-07-23T10:00:00Z",
   "results": [
     {
@@ -352,10 +349,15 @@ graph TB
       "risk_factor_type": "identity",
       "status": "processing",
       "current_round": 1,
-      "message": "您提到的职业背景中，具体的任职时间是？",
+      "message": "请补充完整的18位中国居民身份证号码。",
       "cleared": null,
       "termination_reason": null,
       "extracted_info": {"occupation": "财务经理"},
+      "missing_question_keys": ["id_card_number"],
+      "question_judgements": [
+        {"question_key":"real_name","required":true,"completeness":true,"reasonableness":true,"note":""},
+        {"question_key":"id_card_number","required":true,"completeness":false,"reasonableness":true,"note":"证件号不完整"}
+      ],
       "error": null
     },
     {
@@ -373,19 +375,22 @@ graph TB
 }
 ```
 
-字段说明：`message`为本轮唯一对外展示文案（详见上方"对话展示字段说明"），已不再单独返回`follow_up_question`字段；`status=llm_error`时`error`字段携带`error_code`+`message`（错误场景下的`message`字段语义是错误提示，不代表对话文案），其余字段可为空；该项失败不影响其他风险要素的正常返回。
+字段说明：`status=processing`时`message`为追问文本；单会话终态`message`为局部完成语义，但前端不渲染单项完成气泡。`missing_question_keys`驱动定向追问表单，`question_judgements`用于调试与恢复。`status=llm_error`时由`error`携带错误码和消息；单项失败不影响其他风险要素。
 
-响应体（`stream=true`，`Content-Type: text/event-stream`）：批量场景下多个风险要素的事件在**同一条HTTP流**中按各自LLM调用完成的先后顺序交错到达，前端依赖每个事件的`session_id`字段分流渲染到对应会话卡片，格式详见"流式输出设计"章节的SSE事件帧说明。示例片段：
+响应体（`stream=true`，`Content-Type: text/event-stream`）：首先发送`batch_created`，随后多个风险要素的事件在同一HTTP流中按各自LLM调用完成顺序交错到达，前端依赖`session_id`分流。示例片段：
 
 ```
-event: message_delta
-data: {"session_id":"sess_abc123","content":"您提到"}
+event: batch_created
+data: {"batch_id":"batch_20260723_001"}
 
 event: message_delta
-data: {"session_id":"sess_abc123","content":"的职业背景中，具体的任职时间是？"}
+data: {"session_id":"sess_abc123","content":"请补充完整的18位"}
+
+event: message_delta
+data: {"session_id":"sess_abc123","content":"中国居民身份证号码。"}
 
 event: result
-data: {"session_id":"sess_abc123","risk_factor_type":"identity","status":"processing","current_round":1,"message":"您提到的职业背景中，具体的任职时间是？","cleared":null,"termination_reason":null,"extracted_info":{"occupation":"财务经理"}}
+data: {"session_id":"sess_abc123","risk_factor_type":"identity","status":"processing","current_round":1,"message":"请补充完整的18位中国居民身份证号码。","cleared":null,"termination_reason":null,"extracted_info":{"real_name":"张三"}}
 
 event: done
 data: {"session_id":"sess_abc123"}
@@ -404,10 +409,15 @@ data: {"session_id":"sess_def456"}
 请求体：
 
 ```json
-{ "answer": "任职时间为2020年至今", "stream": false }
+{
+  "answers": [
+    {"question_key": "id_card_number", "text": "110101199001011234"}
+  ],
+  "stream": false
+}
 ```
 
-`stream`字段含义与用法同上，可选，默认`false`。
+追问同样使用结构化`answers[]`，并按该会话当前的`missing_question_keys`定向提交。旧`answer`字符串仅作兼容。`stream`可选，默认`false`。
 
 响应体（`stream=false`，HTTP 200）：
 
@@ -427,12 +437,6 @@ data: {"session_id":"sess_def456"}
 响应体（`stream=true`，`Content-Type: text/event-stream`，单session单路事件）：
 
 ```
-event: message_delta
-data: {"session_id":"sess_abc123","content":"谢谢您的配合，"}
-
-event: message_delta
-data: {"session_id":"sess_abc123","content":"审核结果将在3个工作日内推送给您。"}
-
 event: result
 data: {"session_id":"sess_abc123","status":"cleared","current_round":1,"message":"该项资料无需继续补充。","cleared":true,"termination_reason":null,"extracted_info":{"occupation":"财务经理","tenure":"2020年至今"}}
 
@@ -440,7 +444,7 @@ event: done
 data: {"session_id":"sess_abc123"}
 ```
 
-校验规则：`session_id`不存在 → `404 SESSION_NOT_FOUND`；session非`processing`状态提交 → `409 SESSION_NOT_PROCESSING`；`answer`为空 → `400 INVALID_PARAM`（流式模式下同样在建立流之前做前置校验，校验失败仍返回标准JSON错误响应，不建立SSE连接）。
+单会话终态不发送`message_delta`；若仍需补充资料，才在`result`前发送追问文本增量。`session_id`不存在返回`404 SESSION_NOT_FOUND`；非`processing`状态提交返回`409 SESSION_NOT_PROCESSING`；`answers`为空或答案格式非法返回`400 INVALID_PARAM`。
 
 ### 3. GET /api/v1/batches/{batch_id} — 批次查询
 
@@ -449,37 +453,48 @@ data: {"session_id":"sess_abc123"}
 ```json
 {
   "batch_id": "batch_20260723_001",
+  "user_id": "u_1001",
+  "user_name": "张三",
   "created_at": "2026-07-23T10:00:00Z",
   "sessions": [
     {
       "session_id": "sess_abc123",
       "risk_factor_type": "identity",
       "main_question": "请说明您的身份信息及职业背景",
-      "status": "cleared",
+      "questions": [
+        {"question_key":"real_name","question_text":"姓名","answer_type":"text","required":true,"min_submit_count":1,"max_submit_count":1,"sort_order":10},
+        {"question_key":"id_card_number","question_text":"身份证号","answer_type":"text","required":true,"min_submit_count":1,"max_submit_count":1,"sort_order":20},
+        {"question_key":"id_card_image","question_text":"身份证图片","answer_type":"image","required":true,"min_submit_count":1,"max_submit_count":1,"sort_order":30}
+      ],
+      "status": "processing",
       "current_round": 1,
       "max_rounds": 3,
-      "message": "该项资料无需继续补充。",
-      "cleared": true,
+      "message": "请补充完整身份证号。",
+      "cleared": null,
       "termination_reason": null,
-      "extracted_info": {"occupation": "财务经理", "tenure": "2020年至今"},
+      "extracted_info": {"real_name":"张三"},
+      "missing_question_keys": ["id_card_number"],
+      "question_judgements": [
+        {"question_key":"id_card_number","required":true,"completeness":false,"reasonableness":true,"note":"证件号不完整"}
+      ],
       "history": [
-        {"round": 0, "question": "请说明您的身份信息及职业背景", "answer": "我是XX公司的财务经理...", "completeness": false, "reasonableness": true},
-        {"round": 1, "question": "您提到的职业背景中，具体的任职时间是？", "answer": "任职时间为2020年至今", "completeness": true, "reasonableness": true}
-      ]
+        {"round":0,"question":"请说明您的身份信息及职业背景","answer":"姓名: 张三\n身份证号: 1101...","completeness":false,"reasonableness":true,"question_judgements":[]}
+      ],
+      "error": null
     }
   ]
 }
 ```
 
-`batch_id`不存在 → `404 BATCH_NOT_FOUND`。查询类接口同样返回`message`字段（取该session当前的`UserMessage()`推导结果），便于前端刷新页面后恢复对话上下文时无需额外拼装文案。
+批次查询返回用户上下文、当前问题配置、缺失问题、逐问题判断及历史记录，前端据此恢复追问表单和上传归属；不依赖刷新前的内存状态。`batch_id`不存在返回`404 BATCH_NOT_FOUND`。
 
 ### 4. GET /api/v1/sessions/{session_id} — 会话详情查询
 
-响应体结构同上"sessions"数组中单项，直接返回该session完整详情（含`history`数组与`message`字段）。`session_id`不存在 → `404 SESSION_NOT_FOUND`。
+返回单会话当前状态、逐问题判断、缺失项和`history`。当前问题树只在批次查询恢复链路中补齐，因此需要恢复可编辑表单时应调用`GET /api/v1/batches/{batch_id}`。`session_id`不存在返回`404 SESSION_NOT_FOUND`。
 
-### 5. GET /api/v1/users/{user_id}/main-questions — 按用户查询主问题（**实现阶段新增**）
+### 5. GET /api/v1/users/{user_id}/main-questions — 按用户查询问题树
 
-**背景**：批量提交接口最初要求调用方自行填写每个风险要素的`main_question`；实现阶段改为由用户预配置"拥有哪些风险项"，主问题统一由后端按风险要素类型维护，调用方仅需传入`user_id`即可拉取该用户应回答的全部问题列表，前端据此拼装批量提交请求体（详见"前端调试页面设计"章节的聊天式改造）。
+用户通过`users.risk_factor_types`预配置风险要素；后端从统一问题表返回group主问题及子问题配置。调用方传入`user_id`即可获取完整表单定义，再按`question_key`组装批量提交请求。
 
 路径参数：`user_id`
 
@@ -489,15 +504,43 @@ data: {"session_id":"sess_abc123"}
 {
   "user_id": "u_1001",
   "items": [
-    { "risk_factor_type": "identity", "main_question": "请说明您的身份信息及职业背景" },
-    { "risk_factor_type": "fund_source", "main_question": "请说明本次资金的来源" }
+    {
+      "risk_factor_type": "fund_source",
+      "main_question": "请说明本次资金的来源",
+      "questions": [
+        {"question_key":"fund_source_description","question_text":"资金来源说明","answer_type":"text","required":true,"min_submit_count":1,"max_submit_count":1,"sort_order":10},
+        {"question_key":"fund_source_evidence","question_text":"银行流水、收入证明等资金来源证明材料","answer_type":"image","required":false,"min_submit_count":1,"max_submit_count":5,"sort_order":20}
+      ]
+    }
   ]
 }
 ```
 
-字段说明：`items`按该用户`users.risk_factor_types`列配置的顺序返回；若某个已配置的风险要素类型在`risk_factor_main_questions`映射表中缺失对应主问题，该类型会被静默跳过（不返回半成品项，仅记录警告日志），不影响其他类型正常返回。
+`items`按`users.risk_factor_types`配置顺序返回，问题树来自`risk_factor_questions`的启用group根节点和子问题；Skill规则不向前端暴露。配置缺失、孤儿节点、空group或子问题未关联Skill会作为配置错误返回，不再静默拼装半成品。用户不存在返回`404 USER_NOT_FOUND`；用户未配置风险要素时返回`items: []`。
 
-校验规则：`user_id`不存在 → `404 USER_NOT_FOUND`（"用户拥有哪些风险项"是预配置业务数据，本接口不会自动创建用户，需提前通过运营/导入流程写入`users.risk_factor_types`）；用户存在但未配置任何风险项时，返回`items: []`（HTTP 200，非错误）。
+### 6. POST /api/v1/attachments — 上传图片证据
+
+请求使用`multipart/form-data`：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `user_id` | 是 | 文件所有者，提交答案时必须与会话用户一致 |
+| `risk_factor_type` | 是 | 文件所属风险要素 |
+| `question_key` | 是 | 必须是启用的`image/file`问题 |
+| `file` | 是 | JPEG、PNG或WebP原图，原始大小不超过`storage.max_file_bytes` |
+
+成功返回HTTP 201：
+
+```json
+{
+  "file_id": "8a8d...",
+  "original_name": "bank.png",
+  "mime_type": "image/jpeg",
+  "size_bytes": 245678
+}
+```
+
+服务端校验扩展名、MIME和真实图片内容，限制解码像素数，统一转为JPEG并压缩到`storage.max_stored_image_bytes`（默认1MB）后再以0600权限落盘；响应MIME、大小、SHA-256和数据库元数据均基于压缩文件。上传接口不累计历史文件数；当前答案引用数量由提交接口按问题的`min_submit_count/max_submit_count`及`storage.max_files_per_question`校验。
 
 ## 数据层设计
 
@@ -507,26 +550,29 @@ data: {"session_id":"sess_abc123"}
 erDiagram
     users ||--o{ batches : "发起"
     batches ||--o{ risk_factor_sessions : "包含"
-    risk_factor_sessions ||--o{ qa_records : "包含"
+    risk_factor_sessions ||--o{ qa_records : "轮次历史"
+    risk_factor_sessions ||--o{ question_submissions : "结构化提交"
+    risk_factor_questions ||--o{ risk_factor_questions : "父子层级"
+    risk_factor_questions ||--o{ question_skill_refs : "引用"
+    audit_skills ||--o{ question_skill_refs : "被引用"
+    uploaded_files ||--o{ question_submissions : "文件引用"
 
     users {
         bigint id PK
-        varchar user_id "业务唯一键"
+        varchar user_id UK
         varchar name
-        varchar risk_factor_types "该用户拥有的风险要素类型，逗号分隔字符串，如identity,fund_source（实现阶段新增）"
-        datetime created_at
-        datetime updated_at
+        varchar risk_factor_types
     }
     batches {
         bigint id PK
-        varchar batch_id "业务唯一键"
-        varchar user_id "逻辑关联users.user_id"
+        varchar batch_id UK
+        varchar user_id
         datetime created_at
     }
     risk_factor_sessions {
         bigint id PK
-        varchar session_id "业务唯一键"
-        varchar batch_id "逻辑关联batches.batch_id"
+        varchar session_id UK
+        varchar batch_id
         varchar user_id
         varchar risk_factor_type
         text main_question
@@ -538,32 +584,72 @@ erDiagram
         varchar termination_reason
         tinyint cleared
         json extracted_info
-        text follow_up_question "当前待回答的追问问题"
-        int version "乐观锁"
-        datetime created_at
-        datetime updated_at
+        text follow_up_question
+        int version
     }
     qa_records {
         bigint id PK
-        varchar session_id "逻辑关联risk_factor_sessions.session_id"
+        varchar session_id
         int round
         text question
         text answer
         tinyint completeness
         tinyint reasonableness
+        json question_judgements
         json extracted_info_delta
-        datetime created_at
     }
-    risk_factor_main_questions {
+    risk_factor_questions {
         bigint id PK
-        varchar risk_factor_type "唯一键，如identity/fund_source（实现阶段新增，全局固定映射，不与用户关联）"
-        text main_question
-        datetime created_at
-        datetime updated_at
+        varchar risk_factor_type
+        varchar question_key
+        bigint parent_id
+        text question_text
+        varchar answer_type
+        tinyint required
+        int min_submit_count
+        int max_submit_count
+        int sort_order
+        tinyint enabled
+    }
+    audit_skills {
+        bigint id PK
+        varchar skill_key UK
+        varchar name
+        text rule_text
+        varchar evidence_type
+        tinyint enabled
+    }
+    question_skill_refs {
+        bigint id PK
+        bigint question_id
+        bigint skill_id
+        int sort_order
+    }
+    uploaded_files {
+        bigint id PK
+        varchar file_id UK
+        varchar user_id
+        varchar risk_factor_type
+        varchar question_key
+        varchar stored_path
+        varchar mime_type
+        bigint size_bytes
+        char sha256
+    }
+    question_submissions {
+        bigint id PK
+        varchar submission_id UK
+        varchar session_id
+        int round
+        varchar risk_factor_type
+        varchar question_key
+        varchar value_type
+        text text_value
+        varchar file_id
     }
 ```
 
-说明：`message`字段本身不直接存储，而是由`RiskFactorSession.UserMessage()`运行时推导：终态时是领域常量，无需存储；非终态时等价于`risk_factor_sessions.follow_up_question`列（**实现阶段修订**：由于`qa_records`表按`(session_id, round)`成对记录"问题+回答"，而追问问题在生成时其对应轮次的回答尚未提交，无法提前写入`qa_records`，因此在`risk_factor_sessions`表新增`follow_up_question`列，专门保存"当前待回答的追问问题文本"，用于跨HTTP请求保持该状态；该轮真正被回答后，会作为完整的`(question, answer)`对写入`qa_records`）。
+`risk_factor_main_questions`仅是`0002`的过渡表，已由`0003`迁移为`risk_factor_questions`的group根节点并删除。`message`不落库：处理中来自`follow_up_question`，单会话终态由领域常量推导；批次最终文案由前端聚合全部会话状态后展示。
 
 ### 外键约束设计决策
 
@@ -655,58 +741,81 @@ DROP TABLE IF EXISTS `batches`;
 DROP TABLE IF EXISTS `users`;
 ```
 
-### 增量迁移：用户风险项与主问题映射（`migrations/0002_add_user_risk_factors_and_main_questions.up.sql`，**实现阶段新增**）
+### 增量迁移与最终配置表 DDL
 
-支撑"GET /api/v1/users/{user_id}/main-questions"接口：`users`表新增`risk_factor_types`列记录用户拥有哪些风险项，新建`risk_factor_main_questions`表维护风险要素类型到主问题的全局固定映射（所有用户共用同一套文案，不按用户区分）。为方便本机联调，迁移中顺带 seed 了 identity/fund_source 两条默认主问题及一条调试用户`u_1001`。
+迁移必须按`0001 → 0002 → 0003 → 0004`执行：
+
+- `0002`：为`users`增加`risk_factor_types`，创建过渡表`risk_factor_main_questions`并写入调试seed。
+- `0003`：将过渡主问题迁为统一问题树，创建Skill、附件元数据和结构化提交表，为`qa_records`增加逐问题判断快照，随后删除过渡表。
+- `0004`：为问题增加`max_submit_count`；资金来源与交易场景图片证据调整为选填、提交时允许1–5张。
+
+最终统一问题表结构为：
 
 ```sql
-ALTER TABLE `users`
-  ADD COLUMN `risk_factor_types` VARCHAR(255) NOT NULL DEFAULT '' COMMENT '该用户拥有的风险要素类型列表，逗号分隔，如 identity,fund_source' AFTER `name`;
-
-CREATE TABLE `risk_factor_main_questions` (
-  `id`               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `risk_factor_type` VARCHAR(32) NOT NULL COMMENT '风险要素类型标识，如 identity/fund_source',
-  `main_question`    TEXT NOT NULL COMMENT '该风险要素类型对应的主问题内容',
-  `created_at`       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at`       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+CREATE TABLE `risk_factor_questions` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `risk_factor_type` VARCHAR(32) NOT NULL,
+  `question_key` VARCHAR(64) NOT NULL,
+  `parent_id` BIGINT UNSIGNED DEFAULT NULL,
+  `question_text` TEXT NOT NULL,
+  `answer_type` VARCHAR(16) NOT NULL COMMENT 'group/text/image/file',
+  `required` TINYINT(1) NOT NULL DEFAULT 1,
+  `min_submit_count` INT UNSIGNED NOT NULL DEFAULT 1,
+  `max_submit_count` INT UNSIGNED NOT NULL DEFAULT 1,
+  `sort_order` INT NOT NULL DEFAULT 0,
+  `enabled` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_risk_factor_type` (`risk_factor_type`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='风险要素类型-主问题映射表';
+  UNIQUE KEY `uk_risk_factor_question_key` (`risk_factor_type`, `question_key`),
+  KEY `idx_risk_factor_question_tree` (`risk_factor_type`, `parent_id`, `enabled`, `sort_order`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 ```
 
-回滚脚本（`migrations/0002_add_user_risk_factors_and_main_questions.down.sql`）按依赖反序删除：
+其余新增表的权威DDL位于`migrations/0003_unify_risk_factor_questions.up.sql`：
 
-```sql
-DROP TABLE IF EXISTS `risk_factor_main_questions`;
-ALTER TABLE `users` DROP COLUMN `risk_factor_types`;
-```
+- `audit_skills`：可运营审核规则，`skill_key`唯一。
+- `question_skill_refs`：问题与Skill多对多引用及排序。
+- `uploaded_files`：压缩后文件的受控相对路径、归属、MIME、大小和SHA-256。
+- `question_submissions`：按`session_id/round/question_key`保存文本或文件引用。
+- `qa_records.question_judgements`：保存当轮逐问题判断JSON快照。
+
+最终规则seed：
+
+| question_key | required | min | max |
+| --- | ---: | ---: | ---: |
+| `id_card_image` | 1 | 1 | 1 |
+| `fund_source_evidence` | 0 | 1 | 5 |
+| `transaction_evidence` | 0 | 1 | 5 |
+
+Down迁移必须按`0004 → 0003 → 0002 → 0001`逆序执行。完整可执行SQL以`migrations/*.sql`为唯一权威来源，`docs/MYSQL_SETUP.md`给出初始化和回滚命令。
 
 ## 前端调试页面设计
 
 ### 定位与目标
 
-前端仅作为**开发调试工具**，用于人肉验证批量提交/追问循环/流式输出/状态机结论等后端能力是否符合预期，不追求生产级视觉与交互完整度，不涉及用户登录、权限管理等业务功能；整体呈单一聊天窗口样式，主问题由后端按用户配置自动拉取，调试者只需在统一表单中填答即可走完整个流程（**实现阶段历次修订**：最初需手填`main_question`并以多个独立卡片盒子展示各会话→改为聊天式交互+每会话独立追问输入框→现二次修订为"首轮与追问均以表单批量提交，调试字段独立于主界面展示"，详见下方"页面功能"）。
+前端是开发调试工具，用于验证问题树、结构化答案、多图上传、批量审核、追问循环、SSE和批次恢复。页面采用统一聊天窗口：首轮与追问均以动态表单批量提交，状态、逐问题判断和批次查询集中在独立调试抽屉中；不包含登录和生产级权限管理。
 
 ### 技术选型
 
-- Vue 3 + `<script setup>` + TypeScript + Vite：搭建成本低、无需引入路由/状态管理等重型依赖；原生 `fetch` + `ReadableStream`（或 `EventSource`，见下方取舍说明）即可满足调试需求。
+- Vue 3 + `<script setup>` + TypeScript + Vite；使用原生`fetch` + `ReadableStream`解析POST SSE，不引入路由或状态管理框架。
 - 不引入 UI 组件库，使用最基础的原生表单元素+少量CSS，减少依赖体积与学习成本，符合"调试工具"定位。
-- 与后端解耦部署：开发态通过 Vite Dev Server 的 `server.proxy` 将 `/api` 转发到本地 Hertz 服务（默认 `:8080`）；构建后的静态产物也可选择性地由 Hertz 通过 `internal/api/router.go` 挂载的静态文件Handler直接托管（`/`路径），实现单进程一体化调试部署（可选，不强制）。
+- 前后端解耦运行：开发态由Vite的`server.proxy`把`/api`转发到本地Hertz `:8080`。当前`router.go`仅注册API路由，不托管`web/dist`静态文件。
 
 ### SSE 客户端实现方式的选择
 
 原生浏览器 `EventSource` 只支持 GET 请求，而本方案的流式接口均为 POST（批量提交/追问回答提交的请求体较复杂，不适合塞进 query string），因此前端**不使用 `EventSource`**，改为：`fetch(url, {method:'POST', body, headers})` 拿到 `Response.body`（`ReadableStream`），自行按 SSE 文本协议（`event:`/`data:`空行分隔）解析每一帧，兼容性好且不受GET限制。
 
-### 页面功能（对话交互遵循"统一message"原则，**实现阶段二次修订：追问与首轮统一为"表单式批量提交"，调试信息独立于主界面**）
+### 页面功能（结构化表单、会话状态与批次级文案分层）
 
 整页为一个统一的聊天窗口，核心原则是**所有需要用户输入的问答（无论是首轮主问题还是后续追问）都以表单形式一次性展示、统一提交，不支持逐条单独提交**；`session_id`/原始`status`枚举/`extracted_info`等调试字段完全不出现在主界面，仅在独立的调试抽屉中展示。核心流程：
 
-1. **用户信息录入 & 主问题拉取**：顶部录入条录入`user_id`/`name`（不再手填`main_question`），点击"开始"后调用 `GET /api/v1/users/{user_id}/main-questions` 拉取该用户拥有的风险项与主问题列表；`user_id`不存在（`404 USER_NOT_FOUND`）或该用户未配置任何风险项时给出明确提示。
-2. **首轮问答表单**：拉取成功后，在聊天窗口内为每个风险项渲染一张"问答卡"（只读主问题气泡 + 可编辑回答输入框），用户需要填完全部问答卡的回答后，才能点击底部**唯一**的"提交回答"按钮；提交时按`risk_factors`结构组装请求体调用 `POST /api/v1/batches`（原批量提交接口不变，仅`main_question`来源变为接口查询而非手填）。
+1. **用户信息录入与问题树拉取**：顶部录入`user_id/name`，点击“开始”后调用`GET /api/v1/users/{user_id}/main-questions`拉取风险要素、group主问题及子问题配置。
+2. **首轮结构化表单**：按`answer_type`渲染文本或图片控件。必填项必须完成；选填图片可省略，但一旦选择必须满足`min_submit_count/max_submit_count`。身份证图片限1张，资金来源和交易场景证据选填且允许1–5张。图片先上传换取`file_id`，再通过`answers[]`统一提交。
 3. **会话消息流（只读历史，合并进同一聊天窗口）**：提交后按返回的每个`session_id`在同一个聊天窗口内追加一组消息（不带外层边框，仅有风险要素标签chip如"身份信息"/"资金来源"区分归属），仅展示只读的问答气泡历史（主问题/回答/系统消息），不再在每个会话内嵌独立的追问输入框与提交按钮。
-4. **追问统一表单（核心改动）**：提交一轮回答后，若某些会话仍需追问（`status=processing`）或需要重试（`status=llm_error`），这些会话始终占据聊天窗口底部的**同一个表单区域**，与首轮问答卡外观一致（只读问题气泡+可编辑回答输入框）。用户需要填完当前这一批全部待答项后，点击**唯一**的"提交回答"按钮，前端并发调用各自的 `POST /api/v1/sessions/{id}/answers` 一次性提交——不允许对某个会话单独抢先提交。提交后当前问题+回答固化进上方只读历史，表单卡片本身进入"正在生成问题"状态；新一轮问题直接在该表单卡片的问题区域生成，生成完成后输入框解锁供下一轮作答。问题不会先在上方只读历史中单独展示一遍再复制到表单，避免重复。如此循环，直至全部会话进入`cleared`/`not_cleared`终态，届时聊天窗口展示"全部问题已完成"提示。
-5. **流式增量展示（直接生成表单）**：无论是首轮提交还是统一追问提交，开启"流式"开关后，收到的`message_delta`事件直接追加到对应会话表单卡片的问题文本缓冲区并逐字渲染（带光标动画）；生成期间回答输入框禁用，收到最终`result`事件且状态为`processing`后，生成内容落为该卡片的正式问题并解锁输入框。上方只读历史不渲染这段生成过程；只有终态收尾话术会追加为系统消息。收到`error`事件则保留上一次已知问题，并在同一表单卡片内显示错误提示供原地重试。
-6. **调试面板（独立于主界面，不嵌入聊天/表单流程）**：页面头部提供"调试信息"按钮，点击后以右侧抽屉形式弹出，展示当前`batch_id`、每个会话的`session_id`/原始状态徽标（`StatusBadge`）/已提取字段(`extracted_info`)JSON，以及"批次查询"工具（粘贴`batch_id`调用 `GET /api/v1/batches/{id}` 重新拉取整批状态，用于刷新页面后恢复调试上下文，恢复后直接进入"会话消息流"视图）。该抽屉与主聊天/表单区域完全解耦，关闭后不影响任何主界面状态。
+4. **追问统一表单**：`processing`会话按`missing_question_keys`只展示缺失子问题；用户填写当前全部待答项后统一并发提交`POST /api/v1/sessions/{id}/answers`。部分风险要素已完成、部分仍需补充时显示完成项摘要；单项终态不产生系统气泡。全部会话结束时只显示“审核结果将在3个工作日内推送给您”。
+5. **流式增量展示**：`message_delta`直接生成追问文本；终态只接收`result/done`，不追加单项收尾消息。前端显示实时等待秒数，后端300秒超时，客户端315秒兜底。
+6. **调试面板与恢复现场**：流式开关位于调试抽屉并默认勾选。抽屉展示批次、会话状态、缺失问题和逐问题判断；输入`batch_id`后，使用批次响应中的`user_id/user_name/questions/missing_question_keys/history`重建用户上下文、问题树和追问表单。
 
 ### 目录结构（前端工程，独立于Go module）
 
@@ -720,77 +829,45 @@ web/
     ├── main.ts
     ├── App.vue                   # 页面主体：编排"用户信息录入→主问题拉取→首轮表单提交→会话消息流→追问统一表单(循环)"全流程；维护followUpDrafts等聚合状态，追问统一并发提交
     ├── api/
-    │   └── client.ts             # 封装主问题查询/批量提交/追问提交(含stream参数)/批次查询/会话查询的HTTP调用；流式请求内自行解析SSE文本帧(message_delta/result/done/error)
+    │   └── client.ts             # 问题树、上传、同步/SSE提交、批次恢复与超时处理；解析batch_created/message_delta/result/done/error
     ├── components/
-    │   ├── RiskFactorForm.vue    # 顶部用户信息录入条：user_id/name输入+流式开关+"开始"按钮（不再含main_question手填与风险要素增删）
-    │   ├── QAFormCard.vue        # 通用问答卡组件：只读问题气泡+可编辑回答输入框，首轮问答表单与追问统一表单均复用此组件（实现阶段新增）
-    │   ├── SessionCard.vue       # 单个会话的只读消息组（无外层边框，供统一聊天流中按risk_factor穿插渲染）：仅展示对话气泡(loading/系统消息)+风险要素标签chip，不含状态徽标/session_id/追问输入框（实现阶段二次修订：调试字段与输入交互均已移出）
-    │   ├── DebugPanel.vue        # 调试信息抽屉（实现阶段二次修订新增）：独立展示batch_id、各会话session_id/StatusBadge/extracted_info JSON，并承载"批次查询"工具，与主界面完全解耦
-    │   └── StatusBadge.vue       # 状态徽标小组件（processing/cleared/not_cleared/llm_error配色），仅在DebugPanel.vue内使用
-    └── types.ts                  # 与后端DTO对应的TS类型定义（BatchResponse/SessionResult/MainQuestionsResponse/SSE事件类型等，含统一的message字段）
+    │   ├── RiskFactorForm.vue    # 顶部用户信息录入条：user_id/name输入及开始/重置操作
+    │   ├── QAFormCard.vue        # 动态文本/图片表单：选填/必填、数量范围、多图上传与删除，首轮和追问复用
+    │   ├── SessionCard.vue       # 按风险要素展示只读历史气泡和标签，不承载调试字段或输入控件
+    │   ├── DebugPanel.vue        # 调试抽屉：流式开关、会话状态、缺失项、逐项判断及batch_id恢复
+    │   └── StatusBadge.vue       # processing/cleared/not_cleared/llm_error状态徽标
+    └── types.ts                  # 后端DTO、问题树、结构化草稿和SSE事件的TypeScript类型
 ```
 
 ## Directory Structure Summary
 
-全新全栈项目：后端按DDD分层组织：domain（领域规则，含`UserMessage()`展示文案推导）、application（用例编排）、infra（LLM与持久化适配器，依赖倒置实现domain端口，含增量参数扫描转发）、api（Hertz接口层，按上述接口文档实现，含SSE流式写出）、config、迁移脚本；前端`web/`目录为独立的Vue调试工程，通过HTTP消费后端接口，两者以`eino-risk-qa/`为项目根目录并列存在。
-
-```
+```text
 eino-risk-qa/
-├── cmd/
-│   └── server/
-│       └── main.go                          # 依赖组装：加载配置→构造infra实现(JudgerAdapter/GORMSessionRepository)→注入application service→注入api handler→注册路由(含API Key中间件)→启动Hertz
+├── cmd/server/main.go                 # 配置加载与依赖装配；文本/视觉模型分流
+├── configs/                           # 本地与测试配置
+├── docs/                              # 设计与MySQL初始化说明
 ├── internal/
-│   ├── domain/
-│   │   └── riskfactor/
-│   │       ├── session.go                   # 聚合根RiskFactorSession：状态机全部规则(SubmitInitialAnswer/SubmitFollowUpAnswer方法)，round校验，终态判定与结论合成(Cleared/NotCleared+reason)，UserMessage()对外展示文案推导
-│   │       ├── judgement.go                 # 值对象JudgementResult(Completeness/Reasonableness/FollowUpQuestion/ExtractedInfo/ReasoningSummary)及ExtractedInfo跨轮次合并方法MergeInto
-│   │       ├── qa_pair.go                   # 值对象QAPair(问题/回答/所属轮次/completeness/reasonableness判断快照)
-│   │       ├── types.go                     # SessionStatus、TerminationReason、RiskFactorType枚举定义、SessionCompletedMessage领域常量
-│   │       ├── events.go                    # 领域事件定义(SessionCleared/SessionNotCleared/FollowUpRequested)，用于审计扩展
-│   │       └── ports.go                     # 端口接口定义：RiskJudger(Judge/JudgeStream方法)、SessionRepository(Save/FindByID/事务方法)，JudgeStreamEvent事件类型，domain层核心抽象，infra实现，application依赖注入使用
-│   ├── application/
-│   │   ├── batch_app_service.go             # BatchAppService：创建batch，errgroup并发调度各风险要素调用SessionAppService.SubmitInitial(Stream)
-│   │   ├── session_app_service.go           # SessionAppService：SubmitInitial/SubmitFollowUp及其Stream变体，加载聚合→调用RiskJudger端口→调用聚合领域方法→SessionRepository端口持久化，事务边界控制
-│   │   └── user_app_service.go              # UserAppService.GetMainQuestions（实现阶段新增）：按user_id查FindUser拿RiskFactorTypes→按类型批量查MainQuestionCatalog→按用户配置顺序组装返回，用户不存在返回ErrUserNotFound
+│   ├── domain/riskfactor/             # 状态机、逐问题判断、端口和值对象
+│   ├── application/                   # 批次、会话、用户问题树用例及流事件
 │   ├── infra/
-│   │   ├── llm/
-│   │   │   ├── factory.go                   # ChatModel工厂：按config.Provider(mock/openai/ark/deepseek)分发eino-ext组件，返回ToolCallingChatModel接口
-│   │   │   ├── prompt.go                    # Prompt/ChatTemplate构建：系统提示词、风险要素类型、历史问答拼装、完整性/合理性判断指引；Tool Schema字段顺序约定follow_up_question为最后一个字段
-│   │   │   ├── schema.go                    # 结构化输出Tool Schema定义(completeness/reasonableness/extracted_info/reasoning_summary/follow_up_question)
-│   │   │   ├── judger_adapter.go            # JudgerAdapter实现domain.RiskJudger端口：组合factory+prompt+schema，含重试与解析失败处理
-│   │   │   └── stream_adapter.go            # JudgeStream解析follow_up_question增量并转发message_delta；单会话终态只发result，不发送批次收尾增量
-│   │   └── persistence/
-│   │       ├── models.go                    # GORM实体：UserModel(实现阶段新增RiskFactorTypes列)/BatchModel/RiskFactorSessionModel(含completeness/reasonableness快照、reason、round、version乐观锁字段)/QARecordModel/RiskFactorMainQuestionModel(实现阶段新增)
-│   │       ├── session_repository.go        # GORMSessionRepository实现domain.SessionRepository：Save(事务内同时写session状态与QA记录)、FindByID，乐观锁条件更新
-│   │       ├── user_batch_repository.go     # GORMUserBatchRepository实现application.UserBatchRepository：EnsureUser/CreateBatch/FindBatch，新增FindUser（解析risk_factor_types逗号字符串，不存在返回ErrUserNotFound）
-│   │       ├── main_question_repository.go  # GORMMainQuestionRepository实现application.MainQuestionCatalog：FindMainQuestions按risk_factor_type IN(...)批量查询（实现阶段新增）
-│   │       └── mapper.go                    # domain聚合 <-> GORM实体的双向映射转换函数，避免domain直接依赖gorm tag
+│   │   ├── llm/                       # mock/openai/ark/deepseek、Prompt、Tool Schema、SSE扫描
+│   │   ├── persistence/               # 会话、用户批次、问题树、附件GORM仓储
+│   │   └── idgen/                     # 业务ID生成
 │   ├── api/
-│   │   ├── router.go                        # Hertz路由注册：/api/v1/batches、/api/v1/sessions/:id/answers、/api/v1/batches/:id、/api/v1/sessions/:id、/api/v1/users/:user_id/main-questions（实现阶段新增），挂载API Key鉴权中间件
-│   │   ├── middleware/
-│   │   │   └── auth.go                      # API Key校验中间件，读取X-API-Key头，未通过返回401 UNAUTHORIZED
-│   │   ├── handler/
-│   │   │   ├── batch_handler.go             # 批量提交/批次查询接口处理，调用BatchAppService，按文档组装results数组响应(含message字段，取自UserMessage())；stream=true时切换SSE写出
-│   │   │   ├── session_handler.go           # 追问提交/会话查询接口处理，调用SessionAppService，统一错误码转换(404/409/400/502/500)；stream=true时切换SSE写出
-│   │   │   └── user_handler.go              # UserHandler.GetMainQuestions（实现阶段新增）：调用UserAppService，404 USER_NOT_FOUND/200正常返回
-│   │   └── dto/
-│   │       ├── batch_dto.go                 # 批量提交请求/响应结构体(BatchRequest/BatchResponse/SessionResult)，json tag对应接口文档字段，含stream与message字段(不含follow_up_question)
-│   │       ├── session_dto.go               # 追问提交请求/响应、查询响应结构体(SessionDetailResponse含history)，含completeness/reasonableness/reason/message字段，含stream字段
-│   │       ├── sse_dto.go                   # SSE事件帧结构体(message_delta/result/done/error)及序列化为SSE文本帧的辅助方法
-│   │       └── user_dto.go                  # MainQuestionItem/MainQuestionsResponse响应结构体（实现阶段新增）
-│   └── config/
-│       └── config.go                        # Viper配置：Server/MySQL DSN/LLM Provider鉴权/最大追问轮次/API Key值
-├── migrations/
-│   ├── 0001_init_schema.up.sql              # 建表：users/batches/risk_factor_sessions(含completeness/reasonableness/reason/round/version字段)/qa_records
-│   ├── 0001_init_schema.down.sql            # 回滚脚本
-│   ├── 0002_add_user_risk_factors_and_main_questions.up.sql   # users新增risk_factor_types列；新建risk_factor_main_questions表；seed默认主问题与调试用户（实现阶段新增）
-│   └── 0002_add_user_risk_factors_and_main_questions.down.sql # 回滚脚本（实现阶段新增）
-├── configs/
-│   └── config.yaml                          # 默认配置样例(含api_key占位)
-├── go.mod / go.sum                          # 依赖：eino、eino-ext、hertz、gorm、mysql driver、viper、errgroup
-├── web/                                      # 前端调试工程（详见"前端调试页面设计"章节的目录结构）
-└── README.md                                # 项目说明、DDD分层说明、完整API接口文档(含请求/响应示例、错误码表、流式说明)、启动方式（含前后端联调步骤）
+│   │   ├── dto/                       # JSON/SSE契约
+│   │   ├── handler/                   # 批次、会话、用户问题、附件接口
+│   │   ├── middleware/                # request_id日志与可选API Key鉴权
+│   │   ├── sse/                       # SSE帧写出
+│   │   └── router.go                  # 六个/api/v1路由
+│   ├── config/                        # Viper配置和DSN
+│   └── logging/                       # slog JSON日志
+├── migrations/                        # 0001–0004 Up/Down迁移
+├── web/                               # Vue 3调试前端
+├── go.mod / go.sum
+└── docs/DESIGN.md                     # 本文档
 ```
+
+`risk_factor_main_questions`及`RiskFactorMainQuestionModel`均已退出最终结构；当前由`RiskFactorQuestionModel`构建层级问题树。附件处理位于`attachment_handler.go`和`image_compressor.go`。
 
 ## Key Code Structures
 
@@ -807,7 +884,7 @@ const (
 type JudgeStreamEvent struct {
     SessionID    string
     Type         StreamEventType
-    MessageDelta string           // 追问问题的真实逐字片段，或终态时一次性给出的完整收尾话术
+    MessageDelta string           // 仅用于需要补充资料时的追问文本增量
     Result       *JudgementResult
     Err          error
 }
@@ -821,7 +898,7 @@ type RiskJudger interface {
 type SessionRepository interface {
     Save(ctx context.Context, session *RiskFactorSession) error // 事务内同时持久化session状态与新增QA记录
     FindByID(ctx context.Context, sessionID string) (*RiskFactorSession, error)
-    // FindByBatchID 按batch_id列出该批次下的全部会话（实现阶段补充，用于批次查询接口）
+    // FindByBatchID 按batch_id列出该批次下的全部会话
     FindByBatchID(ctx context.Context, batchID string) ([]*RiskFactorSession, error)
 }
 ```
@@ -831,9 +908,11 @@ type SessionRepository interface {
 type JudgementResult struct {
     Completeness     bool
     Reasonableness   bool
-    FollowUpQuestion string                 // 仅Completeness=false时有效，针对完整性缺口生成；由RiskFactorSession.UserMessage()在Processing态时对外暴露
+    Questions        []QuestionJudgement // 逐问题完整性/合理性/说明
+    MissingQuestions []string            // 缺失的必填question_key
     ExtractedInfo    map[string]interface{}
     ReasoningSummary string
+    FollowUpQuestion string
 }
 
 // MergeInto 将本轮提取信息与历史累积信息合并，同名字段以最新轮次为准
@@ -866,17 +945,17 @@ func (s *RiskFactorSession) SubmitInitialAnswer(answer string, judgement *Judgem
 func (s *RiskFactorSession) SubmitFollowUpAnswer(answer string, judgement *JudgementResult) error
 
 // UserMessage 推导单风险要素文案：Processing返回追问，终态返回SessionCompletedMessage。
-// BatchSessionCompletedMessage只能由整个批次的聚合状态决定。
+// BatchClosingMessage只能由整个批次的聚合状态决定。
 func (s *RiskFactorSession) UserMessage() string
 
-// Version 只读访问乐观锁版本号（实现阶段补充）：由 infra/persistence 层在 FindByID 还原聚合时赋值，
+// Version 只读访问乐观锁版本号：由 infra/persistence 层在 FindByID 还原聚合时赋值，
 // Save 时用于检测并发冲突（WHERE version=加载时的版本号），domain 层不修改该值、不作为业务规则的一部分
 func (s *RiskFactorSession) Version() int
 ```
 
-## 本地运行方式（实现阶段补充）
+## 本地运行方式
 
-前置条件：本机 MySQL 已按 `docs/MYSQL_SETUP.md` 完成安装与 `eino_risk_qa` 库/账号初始化；Go 1.21+；Node.js 18+。
+前置条件：MySQL已按`docs/MYSQL_SETUP.md`执行到最新迁移；Go 1.26.4；Node.js 20.19+或22.12+（满足Vite 8要求）。
 
 **启动后端**（当前配置使用 DeepSeek 处理文本、火山引擎 Ark 处理图片）：
 
@@ -895,7 +974,22 @@ npm install       # 首次运行需要
 npm run dev        # 默认监听 :5173，已通过 vite.config.ts 将 /api/* 代理到 127.0.0.1:8080
 ```
 
-浏览器打开 `http://localhost:5173/` 即可使用：填写用户ID后点击"开始"自动拉取主问题，在问答表单中填完全部回答后统一点击"提交回答"；勾选"流式输出"可体验 SSE 逐字追问；若仍有会话处于"处理中"，追问问题会重新聚合进底部统一表单，填完后再次点击"提交回答"即可并发提交（不支持逐条单独提交）；点击右上角"调试信息"按钮可在独立抽屉中查看`session_id`/原始状态/已提取字段，以及粘贴`batch_id`恢复调试上下文的"批次查询"工具。
+浏览器打开`http://localhost:5173/`：填写用户ID后拉取问题树，完成必填项并按规则选择图片后统一提交。流式开关位于“调试信息”抽屉且默认开启；抽屉同时展示会话状态、缺失问题、逐项判断，并可通过`batch_id`完整恢复用户、问题树、历史和追问表单。
+
+关键配置：
+
+| 配置项 | 当前默认/样例 | 说明 |
+| --- | --- | --- |
+| `server.addr` | `:8080` | Hertz监听地址 |
+| `llm.provider` | `deepseek` | 主文本模型 |
+| `llm.vision_provider` | `ark` | 含图片答案时使用的视觉模型 |
+| `llm.request_timeout_seconds` | `300` | 单风险要素模型调用总超时 |
+| `storage.local_dir` | `./data/uploads` | 压缩图片落盘根目录 |
+| `storage.max_file_bytes` | `10485760` | 原始上传最大10MB |
+| `storage.max_stored_image_bytes` | `1048576` | 压缩后最大1MB |
+| `storage.max_files_per_question` | `5` | 部署级单答案文件硬上限 |
+| `auth.api_key` | 空 | 空表示本地关闭鉴权 |
+| `log.level` | `info` | JSON日志等级 |
 
 真实 LLM 配置：
 - 文本审核使用 DeepSeek：`llm.provider: deepseek`，密钥通过 `EINO_RISK_QA_LLM_DEEPSEEK_API_KEY` 注入。

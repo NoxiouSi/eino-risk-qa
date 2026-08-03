@@ -125,55 +125,87 @@ eino_risk_qa    eino_risk_qa@localhost
 
 ## 六、初始化项目表结构
 
-项目的建表 SQL 位于 `migrations/0001_init_schema.up.sql`（内容与 `docs/DESIGN.md` 数据层设计章节的 DDL 保持一致，四张表：`users`/`batches`/`risk_factor_sessions`/`qa_records`，均为 `InnoDB` + `utf8mb4`，不使用外键约束，详见 DESIGN.md）。
+项目采用顺序迁移，**必须依次执行 `0001` 至当前最新的 `0004`**。最终结构包含运行数据、统一问题配置、可运营审核 Skill、上传元数据和逐问题提交记录；所有表均为 `InnoDB` + `utf8mb4`，不使用强制外键。
 
-执行方式（任选其一）：
-
-```bash
-# 方式一：直接用mysql客户端导入
-mysql -u eino_risk_qa -p'EinoRiskQa#2026' eino_risk_qa < migrations/0001_init_schema.up.sql
-
-# 方式二：项目引入 golang-migrate 后（详见 DESIGN.md 技术栈选型），用标准迁移命令
-# migrate -path migrations -database "mysql://eino_risk_qa:EinoRiskQa%232026@tcp(127.0.0.1:3306)/eino_risk_qa" up
-```
-
-回滚（清空表结构，谨慎使用）：
+直接使用 MySQL 客户端初始化：
 
 ```bash
-mysql -u eino_risk_qa -p'EinoRiskQa#2026' eino_risk_qa < migrations/0001_init_schema.down.sql
+for migration in migrations/*.up.sql; do
+  echo "applying ${migration}"
+  mysql --default-character-set=utf8mb4 \
+    -u eino_risk_qa -p'EinoRiskQa#2026' eino_risk_qa < "${migration}"
+done
 ```
 
-验证建表结果：
+也可以安装 `golang-migrate` 后执行：
 
 ```bash
-mysql -u eino_risk_qa -p'EinoRiskQa#2026' eino_risk_qa -e "SHOW TABLES;"
+migrate -path migrations \
+  -database "mysql://eino_risk_qa:EinoRiskQa%232026@tcp(127.0.0.1:3306)/eino_risk_qa" \
+  up
 ```
 
-预期输出：
+迁移职责：
 
+| 迁移 | 内容 |
+| --- | --- |
+| `0001` | 创建 `users`、`batches`、`risk_factor_sessions`、`qa_records` |
+| `0002` | 增加用户风险要素配置和过渡主问题表 |
+| `0003` | 升级为 `risk_factor_questions`，创建 Skill、附件、逐问题提交表，并删除过渡主问题表 |
+| `0004` | 增加 `max_submit_count`；资金来源和交易场景图片证据改为选填、允许 1–5 张 |
+
+回滚必须按逆序执行。以下命令会清空项目结构和数据，谨慎使用：
+
+```bash
+for migration in $(find migrations -name '*.down.sql' | sort -r); do
+  echo "reverting ${migration}"
+  mysql --default-character-set=utf8mb4 \
+    -u eino_risk_qa -p'EinoRiskQa#2026' eino_risk_qa < "${migration}"
+done
 ```
-Tables_in_eino_risk_qa
+
+使用 `golang-migrate` 时可改为 `migrate down`。
+
+验证最终结构：
+
+```bash
+mysql -u eino_risk_qa -p'EinoRiskQa#2026' eino_risk_qa -e "
+SHOW TABLES;
+SHOW COLUMNS FROM risk_factor_questions;
+SELECT question_key, required, min_submit_count, max_submit_count
+FROM risk_factor_questions
+WHERE question_key IN ('id_card_image','fund_source_evidence','transaction_evidence');
+"
+```
+
+最终应包含 9 张表：
+
+```text
+audit_skills
 batches
 qa_records
+question_skill_refs
+question_submissions
+risk_factor_questions
 risk_factor_sessions
+uploaded_files
 users
 ```
+
+图片题的预期配置：身份证图片必填且限 1 张；资金来源和交易场景图片证据选填，提交时允许 1–5 张。
 
 ## 七、项目配置文件中的连接串（供 `configs/config.yaml` / Viper 配置参考）
 
 ```yaml
 mysql:
-  host: 127.0.0.1
+  host: "127.0.0.1"
   port: 3306
-  user: eino_risk_qa
+  user: "eino_risk_qa"
   password: "EinoRiskQa#2026"
-  database: eino_risk_qa
-  charset: utf8mb4
-  parse_time: true
-  loc: Local
+  database: "eino_risk_qa"
 ```
 
-对应 GORM DSN 格式示例：
+`charset=utf8mb4&parseTime=True&loc=Local` 由 `internal/config.MySQLConfig.DSN()` 固定追加，无需在 YAML 中重复配置。对应 GORM DSN 格式示例：
 
 ```
 eino_risk_qa:EinoRiskQa#2026@tcp(127.0.0.1:3306)/eino_risk_qa?charset=utf8mb4&parseTime=True&loc=Local

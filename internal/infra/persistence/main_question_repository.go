@@ -80,7 +80,7 @@ func assembleQuestionTrees(questions []RiskFactorQuestionModel, refs map[uint64]
 	roots := make(map[string]uint64)
 	children := make(map[uint64][]application.QuestionNode)
 	for _, question := range questions {
-		node := application.QuestionNode{ID: question.ID, RiskFactorType: question.RiskFactorType, QuestionKey: question.QuestionKey, ParentID: question.ParentID, QuestionText: question.QuestionText, AnswerType: question.AnswerType, Required: question.Required, MinSubmitCount: question.MinSubmitCount, SortOrder: question.SortOrder, Skills: refs[question.ID]}
+		node := application.QuestionNode{ID: question.ID, RiskFactorType: question.RiskFactorType, QuestionKey: question.QuestionKey, ParentID: question.ParentID, QuestionText: question.QuestionText, AnswerType: question.AnswerType, Required: question.Required, MinSubmitCount: question.MinSubmitCount, MaxSubmitCount: question.MaxSubmitCount, SortOrder: question.SortOrder, Skills: refs[question.ID]}
 		nodes[question.ID] = node
 		if err := classifyQuestion(question, node, roots, children); err != nil {
 			return nil, err

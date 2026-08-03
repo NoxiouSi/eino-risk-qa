@@ -35,7 +35,7 @@ const systemPromptTemplate = `你是一名风控尽调审核助手。请严格�
 func BuildMessages(input riskfactor.JudgeInput) ([]*schema.Message, error) {
 	var checklist strings.Builder
 	for i, question := range input.Questions {
-		fmt.Fprintf(&checklist, "%d. [%s] %s（类型=%s，必填=%t，最少提交=%d）\n", i+1, question.QuestionKey, question.QuestionText, question.AnswerType, question.Required, question.MinSubmitCount)
+		fmt.Fprintf(&checklist, "%d. [%s] %s（类型=%s，必填=%t，最少提交=%d，最多提交=%d）\n", i+1, question.QuestionKey, question.QuestionText, question.AnswerType, question.Required, question.MinSubmitCount, question.MaxSubmitCount)
 		for j, rule := range question.Rules {
 			fmt.Fprintf(&checklist, "   规则%d：%s\n", j+1, rule)
 		}

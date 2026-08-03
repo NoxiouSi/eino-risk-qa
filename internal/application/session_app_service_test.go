@@ -125,6 +125,74 @@ func TestSessionAppService_SubmitInitialQuestions_UsesCatalogAndPersistsStructur
 	assert.Equal(t, "text", saved.History[0].Answers[0].ValueType)
 }
 
+func TestSessionAppService_SubmitInitialQuestions_AllowsOmittedOptionalEvidence(t *testing.T) {
+	judger := newFakeJudger()
+	repo := newFakeSessionRepository()
+	catalog := newFakeMainQuestionCatalog()
+	catalog.trees["fund_source"] = application.QuestionTree{RiskFactorType: "fund_source", Root: application.QuestionNode{
+		QuestionText: "请提交资金来源信息", AnswerType: "group",
+		Children: []application.QuestionNode{
+			{QuestionKey: "fund_source_description", QuestionText: "资金来源说明", AnswerType: "text", Required: true, MinSubmitCount: 1, MaxSubmitCount: 1},
+			{QuestionKey: "fund_source_evidence", QuestionText: "资金来源证明", AnswerType: "image", Required: false, MinSubmitCount: 1, MaxSubmitCount: 5},
+		},
+	}}
+	svc := application.NewSessionAppService(judger, repo)
+	svc.ConfigureQuestionSupport(catalog, newFakeAttachmentRepository(), t.TempDir(), 5)
+
+	result := svc.SubmitInitialQuestions(context.Background(), "sess_optional", "batch_1", "user_1", riskfactor.RiskFactorTypeFundSource, []application.QuestionAnswerInput{{QuestionKey: "fund_source_description", Text: "工资收入"}})
+
+	assert.Equal(t, riskfactor.StatusCleared, result.Status)
+	require.Len(t, judger.inputs, 1)
+	require.Len(t, judger.inputs[0].Answers, 1)
+	assert.Equal(t, "fund_source_description", judger.inputs[0].Answers[0].QuestionKey)
+	require.Len(t, judger.inputs[0].Questions, 2)
+	assert.False(t, judger.inputs[0].Questions[1].Required)
+	assert.Equal(t, 5, judger.inputs[0].Questions[1].MaxSubmitCount)
+}
+
+func TestSessionAppService_SubmitInitialQuestions_AcceptsMultipleOptionalEvidenceFiles(t *testing.T) {
+	judger := newFakeJudger()
+	catalog := newFakeMainQuestionCatalog()
+	catalog.trees["fund_source"] = application.QuestionTree{RiskFactorType: "fund_source", Root: application.QuestionNode{
+		QuestionText: "请提交资金来源信息", AnswerType: "group",
+		Children: []application.QuestionNode{{QuestionKey: "fund_source_evidence", QuestionText: "资金来源证明", AnswerType: "image", Required: false, MinSubmitCount: 1, MaxSubmitCount: 5}},
+	}}
+	attachments := newFakeAttachmentRepository()
+	for _, fileID := range []string{"file_1", "file_2"} {
+		attachments.files[fileID] = application.UploadedFile{FileID: fileID, UserID: "user_1", RiskFactorType: "fund_source", QuestionKey: "fund_source_evidence", StoredPath: fileID + ".jpg"}
+	}
+	svc := application.NewSessionAppService(judger, newFakeSessionRepository())
+	svc.ConfigureQuestionSupport(catalog, attachments, t.TempDir(), 5)
+
+	result := svc.SubmitInitialQuestions(context.Background(), "sess_multi", "batch_1", "user_1", riskfactor.RiskFactorTypeFundSource, []application.QuestionAnswerInput{{
+		QuestionKey: "fund_source_evidence", FileIDs: []string{"file_1", "file_2"},
+	}})
+
+	assert.Equal(t, riskfactor.StatusCleared, result.Status)
+	require.Len(t, judger.inputs, 1)
+	require.Len(t, judger.inputs[0].Answers, 1)
+	assert.Len(t, judger.inputs[0].Answers[0].FileIDs, 2)
+	assert.Len(t, judger.inputs[0].Answers[0].ImagePaths, 2)
+}
+
+func TestSessionAppService_SubmitInitialQuestions_RejectsEvidenceAboveQuestionLimit(t *testing.T) {
+	catalog := newFakeMainQuestionCatalog()
+	catalog.trees["transaction_scene"] = application.QuestionTree{RiskFactorType: "transaction_scene", Root: application.QuestionNode{
+		QuestionText: "请提交交易场景信息", AnswerType: "group",
+		Children: []application.QuestionNode{{QuestionKey: "transaction_evidence", QuestionText: "交易证明", AnswerType: "image", Required: false, MinSubmitCount: 1, MaxSubmitCount: 5}},
+	}}
+	svc := application.NewSessionAppService(newFakeJudger(), newFakeSessionRepository())
+	svc.ConfigureQuestionSupport(catalog, newFakeAttachmentRepository(), t.TempDir(), 10)
+
+	result := svc.SubmitInitialQuestions(context.Background(), "sess_too_many", "batch_1", "user_1", riskfactor.RiskFactorTypeTransactionScene, []application.QuestionAnswerInput{{
+		QuestionKey: "transaction_evidence", FileIDs: []string{"1", "2", "3", "4", "5", "6"},
+	}})
+
+	assert.Equal(t, riskfactor.StatusLLMError, result.Status)
+	require.NotNil(t, result.Error)
+	assert.Contains(t, result.Error.Message, "exceeds maximum of 5 files")
+}
+
 func TestSessionAppService_GetSession(t *testing.T) {
 	judger := newFakeJudger()
 	repo := newFakeSessionRepository()
