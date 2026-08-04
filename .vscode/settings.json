@@ -1,0 +1,25 @@
+{
+  "go.toolsManagement.autoUpdate": true,
+  "go.useLanguageServer": true,
+  "go.lintTool": "golangci-lint",
+  "go.lintOnSave": "workspace",
+  "go.formatTool": "goimports",
+  "go.formatFlags": [],
+  "go.buildOnSave": "off",
+  "go.vetOnSave": "off",
+  "[go]": {
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  "[vue]": {
+    "editor.defaultFormatter": "Vue.volar"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "Vue.volar"
+  },
+  "files.exclude": {
+    "**/server.exe": true
+  }
+}

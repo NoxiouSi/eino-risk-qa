@@ -1,5 +1,8 @@
 .codebuddy/
 
+# 本地环境变量（含密钥，勿提交）
+.env
+
 # 前端依赖与构建产物
 web/node_modules/
 web/dist/
@@ -8,6 +11,7 @@ web/.vite/
 # Go 构建产物
 /eino-risk-qa-server
 /bin/
+/server.exe
 
 # 本地日志/临时文件
 *.log

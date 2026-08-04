@@ -1,0 +1,88 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch Server (Go)",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/server",
+      "args": ["-config=configs/config.yaml"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "EINO_RISK_QA_LLM_DEEPSEEK_API_KEY": "${env:EINO_RISK_QA_LLM_DEEPSEEK_API_KEY}",
+        "EINO_RISK_QA_LLM_ARK_API_KEY": "${env:EINO_RISK_QA_LLM_ARK_API_KEY}",
+        "EINO_RISK_QA_LLM_OPENAI_API_KEY": "${env:EINO_RISK_QA_LLM_OPENAI_API_KEY}"
+      },
+      "showLog": true,
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Launch Server (Go, Mock LLM)",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/server",
+      "args": ["-config=configs/config.yaml"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "EINO_RISK_QA_LLM_PROVIDER": "mock"
+      },
+      "showLog": true,
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Launch Frontend (Chrome)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/web",
+      "sourceMapPathOverrides": {
+        "webpack:///./src/*": "${workspaceFolder}/web/src/*",
+        "webpack:///src/*": "${workspaceFolder}/web/src/*"
+      },
+      "preLaunchTask": "npm: dev - web"
+    },
+    {
+      "name": "Launch Frontend (Edge)",
+      "type": "msedge",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/web",
+      "sourceMapPathOverrides": {
+        "webpack:///./src/*": "${workspaceFolder}/web/src/*",
+        "webpack:///src/*": "${workspaceFolder}/web/src/*"
+      },
+      "preLaunchTask": "npm: dev - web"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Full Stack (Mock LLM + Chrome)",
+      "configurations": [
+        "Launch Server (Go, Mock LLM)",
+        "Launch Frontend (Chrome)"
+      ],
+      "presentation": {
+        "hidden": false,
+        "group": "fullstack",
+        "order": 1
+      },
+      "stopAll": true
+    },
+    {
+      "name": "Full Stack (Mock LLM + Edge)",
+      "configurations": [
+        "Launch Server (Go, Mock LLM)",
+        "Launch Frontend (Edge)"
+      ],
+      "presentation": {
+        "hidden": false,
+        "group": "fullstack",
+        "order": 2
+      },
+      "stopAll": true
+    }
+  ]
+}
