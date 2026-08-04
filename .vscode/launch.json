@@ -19,17 +19,6 @@
       "console": "integratedTerminal"
     },
     {
-      "name": "Launch Server (Go, Mock LLM)",
-      "type": "go",
-      "request": "launch",
-      "mode": "debug",
-      "program": "${workspaceFolder}/cmd/server",
-      "args": ["-config=configs/config.mock.yaml"],
-      "cwd": "${workspaceFolder}",
-      "showLog": true,
-      "console": "integratedTerminal"
-    },
-    {
       "name": "Launch Frontend (Chrome)",
       "type": "chrome",
       "request": "launch",
@@ -56,9 +45,9 @@
   ],
   "compounds": [
     {
-      "name": "Full Stack (Mock LLM + Chrome)",
+      "name": "Full Stack (DeepSeek + Chrome)",
       "configurations": [
-        "Launch Server (Go, Mock LLM)",
+        "Launch Server (Go)",
         "Launch Frontend (Chrome)"
       ],
       "presentation": {
@@ -69,9 +58,9 @@
       "stopAll": true
     },
     {
-      "name": "Full Stack (Mock LLM + Edge)",
+      "name": "Full Stack (DeepSeek + Edge)",
       "configurations": [
-        "Launch Server (Go, Mock LLM)",
+        "Launch Server (Go)",
         "Launch Frontend (Edge)"
       ],
       "presentation": {
