@@ -2,13 +2,16 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "type": "npm",
-      "script": "dev",
-      "path": "web",
-      "problemMatcher": [],
       "label": "npm: dev - web",
       "detail": "vite",
+      "type": "shell",
+      "command": "${userHome}\\.nodejs\\node-v22.12.0-win-x64\\npm.cmd",
+      "args": ["run", "dev"],
+      "options": {
+        "cwd": "${workspaceFolder}/web"
+      },
       "isBackground": true,
+      "problemMatcher": [],
       "presentation": {
         "reveal": "always",
         "panel": "new"
