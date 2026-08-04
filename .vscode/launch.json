@@ -42,7 +42,7 @@
         "webpack:///./src/*": "${workspaceFolder}/web/src/*",
         "webpack:///src/*": "${workspaceFolder}/web/src/*"
       },
-      "preLaunchTask": "npm: dev - web"
+      "preLaunchTask": "Start Vite Dev Server"
     },
     {
       "name": "Launch Frontend (Edge)",
@@ -54,7 +54,7 @@
         "webpack:///./src/*": "${workspaceFolder}/web/src/*",
         "webpack:///src/*": "${workspaceFolder}/web/src/*"
       },
-      "preLaunchTask": "npm: dev - web"
+      "preLaunchTask": "Start Vite Dev Server"
     }
   ],
   "compounds": [

@@ -2,13 +2,16 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "npm: dev - web",
-      "detail": "vite",
+      "label": "Start Vite Dev Server",
+      "detail": "运行 vite 开发服务器",
       "type": "shell",
-      "command": "${userHome}\\.nodejs\\node-v22.12.0-win-x64\\npm.cmd",
+      "command": "C:\\Users\\Zz\\.nodejs\\node-v22.12.0-win-x64\\npm.cmd",
       "args": ["run", "dev"],
       "options": {
-        "cwd": "${workspaceFolder}/web"
+        "cwd": "${workspaceFolder}/web",
+        "shell": {
+          "executable": "powershell.exe"
+        }
       },
       "isBackground": true,
       "problemMatcher": [],
