@@ -24,11 +24,8 @@
       "request": "launch",
       "mode": "debug",
       "program": "${workspaceFolder}/cmd/server",
-      "args": ["-config=configs/config.yaml"],
+      "args": ["-config=configs/config.mock.yaml"],
       "cwd": "${workspaceFolder}",
-      "env": {
-        "EINO_RISK_QA_LLM_PROVIDER": "mock"
-      },
       "showLog": true,
       "console": "integratedTerminal"
     },
