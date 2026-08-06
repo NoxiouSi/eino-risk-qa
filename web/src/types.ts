@@ -101,7 +101,7 @@ export interface QuestionDraft {
 }
 export type QuestionDraftMap = Record<string, QuestionDraft>
 
-export interface SSEBatchCreatedPayload { batch_id: string }
+export interface SSEBatchCreatedPayload { batch_id: string; sessions: Array<{ session_id: string; risk_factor_type: string }> }
 export interface SSEMessageDeltaPayload { session_id: string; content: string }
 export interface SSEResultPayload extends SessionResultDTO {}
 export interface SSEDonePayload { session_id: string }

@@ -87,6 +87,9 @@ func (s *SessionAppService) SubmitFollowUp(ctx context.Context, sessionID, answe
 		return SessionResult{}, riskfactor.ErrSessionNotProcessing
 	}
 
+	// 即使旧兼容路径（纯文本回答），也加载审核清单传给 LLM，防止跨风险要素类型追问。
+	specs := loadQuestionSpecs(ctx, s.catalog, session.RiskFactorType)
+
 	judgement, err := s.judger.Judge(ctx, riskfactor.JudgeInput{
 		SessionID:       sessionID,
 		RiskFactorType:  session.RiskFactorType,
@@ -94,6 +97,7 @@ func (s *SessionAppService) SubmitFollowUp(ctx context.Context, sessionID, answe
 		History:         session.History,
 		CurrentQuestion: session.FollowUpQuestion(),
 		LatestAnswer:    answer,
+		Questions:       specs,
 	})
 	if err != nil {
 		log.Error("submit follow-up: judge failed", "error", err.Error())
@@ -158,6 +162,8 @@ func (s *SessionAppService) SubmitFollowUpStream(ctx context.Context, sessionID,
 		return
 	}
 
+	specs := loadQuestionSpecs(ctx, s.catalog, session.RiskFactorType)
+
 	events, err := s.judger.JudgeStream(ctx, riskfactor.JudgeInput{
 		SessionID:       sessionID,
 		RiskFactorType:  session.RiskFactorType,
@@ -165,6 +171,7 @@ func (s *SessionAppService) SubmitFollowUpStream(ctx context.Context, sessionID,
 		History:         session.History,
 		CurrentQuestion: session.FollowUpQuestion(),
 		LatestAnswer:    answer,
+		Questions:       specs,
 	})
 	if err != nil {
 		log.Error("submit follow-up (stream): judge stream failed", "error", err.Error())
@@ -305,6 +312,24 @@ func buildQuestionSpecs(questions []QuestionNode) (map[string]QuestionNode, []ri
 		specs = append(specs, riskfactor.QuestionSpec{QuestionKey: question.QuestionKey, QuestionText: question.QuestionText, AnswerType: question.AnswerType, Required: question.Required, MinSubmitCount: question.MinSubmitCount, MaxSubmitCount: question.MaxSubmitCount, Rules: rules})
 	}
 	return byKey, specs
+}
+
+// loadQuestionSpecs 从目录中加载审核清单（仅问题规格，不需要答案映射）。
+// 供旧兼容路径（纯文本回答）使用，确保 LLM 知晓当前风险要素类型的审核清单。
+func loadQuestionSpecs(ctx context.Context, catalog RiskFactorQuestionCatalog, riskFactorType riskfactor.RiskFactorType) []riskfactor.QuestionSpec {
+	if catalog == nil {
+		return nil
+	}
+	trees, err := catalog.FindQuestionTrees(ctx, []string{string(riskFactorType)})
+	if err != nil {
+		return nil
+	}
+	tree, ok := trees[string(riskFactorType)]
+	if !ok || tree.Root.AnswerType != "group" {
+		return nil
+	}
+	_, specs := buildQuestionSpecs(tree.Root.Children)
+	return specs
 }
 
 func (s *SessionAppService) resolveQuestionAnswers(ctx context.Context, userID string, riskFactorType riskfactor.RiskFactorType, byKey map[string]QuestionNode, answers []QuestionAnswerInput) ([]riskfactor.QuestionAnswer, []string, error) {

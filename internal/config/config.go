@@ -33,7 +33,7 @@ type MySQLConfig struct {
 
 // DSN 拼装 GORM MySQL Driver 所需的 DSN 字符串。
 func (c MySQLConfig) DSN() string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
+	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local&collation=utf8mb4_unicode_ci",
 		c.User, c.Password, c.Host, c.Port, c.Database)
 }
 

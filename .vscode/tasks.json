@@ -2,6 +2,21 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Build Go Server",
+      "detail": "编译 Go 后端，确保调试使用最新代码",
+      "type": "shell",
+      "command": "go",
+      "args": ["build", "-o", "${workspaceFolder}/cmd/server/__debug_bin.exe", "${workspaceFolder}/cmd/server"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": ["$go"],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      }
+    },
+    {
       "label": "Start Vite Dev Server",
       "detail": "运行 vite 开发服务器",
       "type": "shell",

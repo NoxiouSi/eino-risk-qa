@@ -67,9 +67,10 @@ const (
 
 // JudgeStreamEvent 流式判断过程中的单个事件。
 type JudgeStreamEvent struct {
-	SessionID    string // 多路复用标识：批量场景下用于区分事件归属的风险要素
-	Type         StreamEventType
-	MessageDelta string           // Type=StreamEventMessageDelta 时的文本片段
-	Result       *JudgementResult // Type=StreamEventResult 时的最终结构化结果
-	Err          error            // Type=StreamEventError 时的错误
+	SessionID      string // 多路复用标识：批量场景下用于区分事件归属的风险要素
+	RiskFactorType RiskFactorType
+	Type           StreamEventType
+	MessageDelta   string           // Type=StreamEventMessageDelta 时的文本片段
+	Result         *JudgementResult // Type=StreamEventResult 时的最终结构化结果
+	Err            error            // Type=StreamEventError 时的错误
 }

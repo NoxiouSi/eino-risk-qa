@@ -1,5 +1,17 @@
 package dto
 
+// SSESessionInfo 随 batch_created 事件发送的单个会话标识，供前端在流式内容到达前预创建卡片。
+type SSESessionInfo struct {
+	SessionID      string `json:"session_id"`
+	RiskFactorType string `json:"risk_factor_type"`
+}
+
+// SSEBatchCreatedPayload batch_created 事件的 data 字段结构。
+type SSEBatchCreatedPayload struct {
+	BatchID  string           `json:"batch_id"`
+	Sessions []SSESessionInfo `json:"sessions"`
+}
+
 // SSEMessageDeltaPayload message_delta 事件的 data 字段结构。
 type SSEMessageDeltaPayload struct {
 	SessionID string `json:"session_id"`

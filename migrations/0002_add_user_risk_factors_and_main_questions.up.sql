@@ -1,3 +1,5 @@
+SET NAMES utf8mb4;
+
 -- 新增：users 表增加 risk_factor_types 列（逗号分隔字符串，记录该用户拥有哪些风险要素类型，
 -- 取值与 risk_factor_type 枚举一致，如 "identity,fund_source"），供 GET /api/v1/users/{user_id}/main-questions
 -- 查询该用户应回答的风险项列表。默认空字符串，不影响现有 EnsureUser 幂等 upsert 逻辑。

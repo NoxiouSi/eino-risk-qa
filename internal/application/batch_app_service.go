@@ -87,11 +87,21 @@ func (b *BatchAppService) SubmitBatchStream(ctx context.Context, input SubmitBat
 	}
 	log = log.With("batch_id", batchID)
 	log.Info("submit batch (stream): batch created", "risk_factor_count", len(input.RiskFactors))
-	emitter.Emit(StreamEvent{Type: StreamEventBatchCreated, BatchID: batchID})
+
+	// 预生成所有 session_id 并收集映射关系，随 batch_created 事件一次性发送给前端。
+	// 前端收到后即可创建所有卡片（带"生成中..."占位），后续 message_delta 严格按 session_id 匹配。
+	preSessions := make([]BatchSessionInfo, len(input.RiskFactors))
+	for i, rf := range input.RiskFactors {
+		preSessions[i] = BatchSessionInfo{
+			SessionID:      b.ids.NewSessionID(),
+			RiskFactorType: string(rf.RiskFactorType),
+		}
+	}
+	emitter.Emit(StreamEvent{Type: StreamEventBatchCreated, BatchID: batchID, Sessions: preSessions})
 
 	var wg sync.WaitGroup
-	for _, rf := range input.RiskFactors {
-		sessionID := b.ids.NewSessionID()
+	for i, rf := range input.RiskFactors {
+		sessionID := preSessions[i].SessionID
 		rf := rf
 		wg.Add(1)
 		go func() {

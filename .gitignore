@@ -12,6 +12,8 @@ web/.vite/
 /eino-risk-qa-server
 /bin/
 /server.exe
+__debug_bin.exe
+*.exe
 
 # 本地日志/临时文件
 *.log

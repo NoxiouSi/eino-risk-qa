@@ -1,3 +1,5 @@
+SET NAMES utf8mb4;
+
 CREATE TABLE `users` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `user_id` VARCHAR(64) NOT NULL COMMENT '业务用户唯一标识',

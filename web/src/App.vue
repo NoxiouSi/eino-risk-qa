@@ -188,6 +188,9 @@ onUnmounted(stopSubmissionTimer)
 const batchId = ref('')
 const sessions = reactive<Record<string, SessionCardState>>({})
 const sessionOrder = ref<string[]>([])
+// 批次创建时后端返回的 session_id → qaItem 映射。
+// 卡片不立即创建，等 result/error 事件到达时才按需构建，实现逐条揭示。
+const sessionItemMap = new Map<string, MainQuestionItem>()
 
 // 所有需要用户输入的追问回答统一放在此处，与主问题表单同构：
 // 用户填完当前所有待回答项后一次性点击"提交回答"，并发提交给各自会话接口，
@@ -203,7 +206,7 @@ function pendingQuestions(session: SessionCardState): QuestionItem[] {
   return session.questions.filter((question) => missing.size === 0 || missing.has(question.question_key))
 }
 const pendingSessionsAnalyzing = computed(() => pendingSessions.value.some((session) => session.generating))
-const waitingForBatchResults = computed(() => submittingBatch.value && sessionOrder.value.length < qaItems.value.length)
+const anyResultArrived = computed(() => sessionOrder.value.length > 0)
 const completedSessionLabels = computed(() => {
   const hasConfirmedSupplementRequest = pendingSessions.value.some((session) => session.status === 'processing' && !session.generating)
   if (!hasConfirmedSupplementRequest) return []
@@ -240,6 +243,7 @@ const debugSessions = computed(() =>
 function resetSessions() {
   for (const key of Object.keys(sessions)) delete sessions[key]
   sessionOrder.value = []
+  sessionItemMap.clear()
 }
 
 // ---------------- 统一提交：回答完全部问答卡后一次性发起批量首轮提交 ----------------
@@ -274,20 +278,15 @@ async function handleSubmitAll() {
         applyResult(card, r)
       }
     } else {
-      // 流式场景：session_id 由服务端在流中才揭示，且多个风险要素的事件交错到达同一条流。
-      // 采用简化的"先到先认领"策略，将首次出现的 session_id 按顺序与未认领的问答卡绑定——
-      // 这是调试工具的合理简化（生产场景不涉及该问题，详见 docs/DESIGN.md 流式输出设计章节）。
-      const claimed = new Array(qaItems.value.length).fill(false)
-      const claimNextItem = () => {
-        const idx = claimed.findIndex((c) => !c)
-        if (idx === -1) return qaItems.value[0]
-        claimed[idx] = true
-        return qaItems.value[idx]
-      }
-
+      // 流式场景：batch_created 仅存储 session_id → qaItem 映射，不立即创建卡片。
+      // 当某个风险要素的 result/error 事件到达时才创建该卡片，实现"逐条揭示"效果。
       await submitBatchStream(payload, (ev: SSEEvent) => {
         if (ev.type === 'batch_created') {
           batchId.value = ev.data.batch_id
+          for (const s of ev.data.sessions) {
+            const item = qaItems.value.find((i) => i.risk_factor_type === s.risk_factor_type)
+            if (item) sessionItemMap.set(s.session_id, item)
+          }
           return
         }
         const sessionId = (ev.data as { session_id?: string }).session_id
@@ -295,10 +294,12 @@ async function handleSubmitAll() {
 
         let card = sessions[sessionId]
         if (!card) {
-          const item = claimNextItem()
+          // 仅 result/error 事件触发卡片创建（message_delta 等被跳过）
+          if (ev.type !== 'result' && ev.type !== 'error') return
+          const item = sessionItemMap.get(sessionId)
+          if (!item) return
           card = createCard(sessionId, item.risk_factor_type, item.main_question, item.questions)
           commitRound(card, item.main_question, summarizeDrafts(item.questions, answerDrafts[item.risk_factor_type]))
-          card.generating = true
           sessions[sessionId] = card
           sessionOrder.value.push(sessionId)
         }
@@ -479,8 +480,8 @@ async function handleQueryBatch() {
         </template>
 
         <template v-if="batchSubmitted">
-          <div v-if="waitingForBatchResults" class="hint-bubble">
-            资料已提交，正在等待其余风险要素的分析结果（图片审核可能需要数分钟），已等待 {{ submissionElapsedSeconds }} 秒…
+          <div v-if="!anyResultArrived" class="hint-bubble">
+            请稍等，正在分析您提交的资料……
           </div>
 
           <SessionCard
@@ -491,15 +492,12 @@ async function handleQueryBatch() {
           />
 
           <template v-if="pendingSessions.length">
-            <div v-if="pendingSessionsAnalyzing" class="hint-bubble">正在分析其余资料，请稍候…</div>
-            <template v-else>
-              <div v-if="completedSessionLabels.length" class="hint-bubble">
-                {{ completedSessionLabels.join('、') }}已完成，无需继续补充。
-              </div>
-              <div class="hint-bubble">
-                审核后发现仍有 {{ pendingSessions.length }} 个风险要素需要补充资料，请填写下方缺失内容后统一提交：
-              </div>
-            </template>
+            <div v-if="completedSessionLabels.length" class="hint-bubble">
+              {{ completedSessionLabels.join('、') }}已完成，无需继续补充。
+            </div>
+            <div class="hint-bubble">
+              审核后发现仍有 {{ pendingSessions.length }} 个风险要素需要补充资料，请填写下方缺失内容后统一提交：
+            </div>
             <QAFormCard
               v-for="s in pendingSessions"
               :key="s.sessionId"

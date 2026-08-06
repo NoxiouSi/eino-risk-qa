@@ -31,7 +31,14 @@ func (f *sseForwarder) Emit(event application.StreamEvent) {
 
 	switch event.Type {
 	case application.StreamEventBatchCreated:
-		_ = sse.WriteEvent(f.w, "batch_created", map[string]string{"batch_id": event.BatchID})
+		sessions := make([]dto.SSESessionInfo, len(event.Sessions))
+		for i, s := range event.Sessions {
+			sessions[i] = dto.SSESessionInfo{SessionID: s.SessionID, RiskFactorType: s.RiskFactorType}
+		}
+		_ = sse.WriteEvent(f.w, "batch_created", dto.SSEBatchCreatedPayload{
+			BatchID:  event.BatchID,
+			Sessions: sessions,
+		})
 	case application.StreamEventMessageDelta:
 		_ = sse.WriteEvent(f.w, "message_delta", dto.SSEMessageDeltaPayload{
 			SessionID: event.SessionID,

@@ -74,7 +74,7 @@ func (a *JudgerAdapter) consumeStream(ctx context.Context, cancel context.Cancel
 			} else {
 				log.Error("judge stream: recv chunk failed", "error", err.Error())
 			}
-			events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, Type: riskfactor.StreamEventError, Err: err}
+			events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, RiskFactorType: input.RiskFactorType, Type: riskfactor.StreamEventError, Err: err}
 			return
 		}
 		if len(chunk.ToolCalls) == 0 {
@@ -83,7 +83,7 @@ func (a *JudgerAdapter) consumeStream(ctx context.Context, cancel context.Cancel
 		delta := scanner.Feed(chunk.ToolCalls[0].Function.Arguments)
 		if delta != "" {
 			deltaCount++
-			events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, Type: riskfactor.StreamEventMessageDelta, MessageDelta: delta}
+			events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, RiskFactorType: input.RiskFactorType, Type: riskfactor.StreamEventMessageDelta, MessageDelta: delta}
 		}
 	}
 	log.Debug("judge stream: stream ended", "delta_count", deltaCount)
@@ -97,10 +97,10 @@ func (a *JudgerAdapter) consumeStream(ctx context.Context, cancel context.Cancel
 	result, err := parseJudgementForInput(msg, input)
 	if err != nil {
 		log.Error("judge stream: parse final result failed", "error", err.Error())
-		events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, Type: riskfactor.StreamEventError, Err: err}
+		events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, RiskFactorType: input.RiskFactorType, Type: riskfactor.StreamEventError, Err: err}
 		return
 	}
 	log.Info("judge stream: succeeded", "completeness", result.Completeness, "reasonableness", result.Reasonableness)
 
-	events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, Type: riskfactor.StreamEventResult, Result: result}
+	events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, RiskFactorType: input.RiskFactorType, Type: riskfactor.StreamEventResult, Result: result}
 }
