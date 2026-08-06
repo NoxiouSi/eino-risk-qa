@@ -86,6 +86,24 @@ func main() {
 		}
 		judger.ConfigureVisionModel(visionModel)
 	}
+
+	// AttackDetector: L1 LLM 攻击意图判别器，复用主 chatModel（初期不单独配置模型）
+	atkCfg := cfg.LLM.AttackDetector
+	attackDetector := llm.NewAttackDetector(chatModel, llm.AttackDetectorConfig{
+		Enabled:             atkCfg.Enabled,
+		ConfidenceThreshold: atkCfg.ConfidenceThreshold,
+		TimeoutSeconds:      atkCfg.TimeoutSeconds,
+	})
+	if atkCfg.Enabled {
+		logging.L.Info("attack detector enabled",
+			"confidence_threshold", atkCfg.ConfidenceThreshold,
+			"timeout_seconds", atkCfg.TimeoutSeconds,
+		)
+	} else {
+		logging.L.Info("attack detector disabled")
+	}
+	judger.ConfigureAttackDetector(attackDetector)
+
 	sessionRepo := persistence.NewGORMSessionRepository(db)
 	userBatchRepo := persistence.NewGORMUserBatchRepository(db)
 	questionCatalog := persistence.NewGORMMainQuestionRepository(db)

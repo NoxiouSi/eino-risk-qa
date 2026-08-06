@@ -24,6 +24,10 @@ llm:
     api_key: ""
     base_url: ""
     model: "deepseek-v4-flash"
+  attack_detector:
+    enabled: true                     # mock 模式下 LLM 调用被 IsMock() 绕过
+    confidence_threshold: 0.85
+    timeout_seconds: 10
 
 storage:
   local_dir: "./data/uploads"

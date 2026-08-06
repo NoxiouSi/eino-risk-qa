@@ -11,9 +11,14 @@ import (
 func RegisterRoutes(h *server.Hertz, apiKey string, batchHandler *handler.BatchHandler, sessionHandler *handler.SessionHandler, userHandler *handler.UserHandler, attachmentHandlers ...*handler.AttachmentHandler) {
 	v1 := h.Group("/api/v1", middleware.RequestLogger(), middleware.APIKeyAuth(apiKey))
 
-	v1.POST("/batches", batchHandler.SubmitBatch)
+	// LLM 触发类接口添加限流保护（令牌桶：每秒 10 次，突发 20 次）
+	rl := middleware.NewRateLimiter(10, 20)
+	llmGroup := v1.Group("/", rl.Handler(middleware.IPKeyFunc))
+
+	llmGroup.POST("/batches", batchHandler.SubmitBatch)
+	llmGroup.POST("/sessions/:session_id/answers", sessionHandler.SubmitFollowUp)
+
 	v1.GET("/batches/:batch_id", batchHandler.GetBatch)
-	v1.POST("/sessions/:session_id/answers", sessionHandler.SubmitFollowUp)
 	v1.GET("/sessions/:session_id", sessionHandler.GetSession)
 	v1.GET("/users/:user_id/main-questions", userHandler.GetMainQuestions)
 	if len(attachmentHandlers) > 0 && attachmentHandlers[0] != nil {

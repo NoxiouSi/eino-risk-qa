@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/cloudwego/eino/components/model"
@@ -35,12 +36,14 @@ const (
 
 // JudgerAdapter 实现 domain.RiskJudger 端口：组合 ChatModel（通过 factory 可插拔获取）、
 // Prompt 构建、Tool Schema 绑定与结构化输出解析，含失败重试。
+// 内置 AttackDetector 在 BuildMessages 前检测攻击意图，攻击时返回合成 JudgementResult 按"审核不通过"处理。
 type JudgerAdapter struct {
 	chatModel        model.ToolCallingChatModel
 	visionModel      model.ToolCallingChatModel
 	primaryHasVision bool
 	maxRetries       int
 	requestTimeout   time.Duration
+	attackDetector   *AttackDetector
 }
 
 // NewJudgerAdapter 创建适配器；chatModel 应已通过 factory.NewToolCallingChatModel 构造。
@@ -56,6 +59,11 @@ func (a *JudgerAdapter) ConfigurePrimaryVisionSupport(supported bool) {
 // ConfigureVisionModel 设置图片审核专用模型。
 func (a *JudgerAdapter) ConfigureVisionModel(visionModel model.ToolCallingChatModel) {
 	a.visionModel = visionModel
+}
+
+// ConfigureAttackDetector 设置攻击判别器；为 nil 时跳过攻击检测。
+func (a *JudgerAdapter) ConfigureAttackDetector(detector *AttackDetector) {
+	a.attackDetector = detector
 }
 
 // ConfigureRequestTimeout 设置单次判断（包括重试和流读取）的总超时；非正值恢复默认值。
@@ -82,6 +90,7 @@ func (a *JudgerAdapter) modelFor(input riskfactor.JudgeInput) (model.ToolCalling
 var _ riskfactor.RiskJudger = (*JudgerAdapter)(nil)
 
 // Judge 同步判断：绑定工具、调用 Generate、解析工具调用参数为 JudgementResult；解析失败时重试。
+// 攻击检测在 BuildMessages 之前执行；命中攻击时直接返回合成的"审核不通过"JudgementResult。
 func (a *JudgerAdapter) Judge(ctx context.Context, input riskfactor.JudgeInput) (*riskfactor.JudgementResult, error) {
 	log := logging.FromContext(ctx).With("session_id", input.SessionID, "risk_factor_type", string(input.RiskFactorType))
 	chatModel, err := a.modelFor(input)
@@ -89,6 +98,30 @@ func (a *JudgerAdapter) Judge(ctx context.Context, input riskfactor.JudgeInput) 
 		log.Error("judge: select chat model failed", "error", err.Error())
 		return nil, err
 	}
+
+	// L1 攻击检测：在 BuildMessages 之前执行，检测原始用户输入
+	if a.attackDetector != nil {
+		userInput := extractUserInputText(input)
+		detectResult, detectErr := a.attackDetector.Detect(ctx, userInput)
+		if detectErr != nil && errors.Is(detectErr, ErrAttackDetected) {
+			log.Warn(
+				"judge: attack intent detected, rejecting as 'review not passed'",
+				"confidence", detectResult.Confidence,
+				"reason", detectResult.Reason,
+			)
+			return &riskfactor.JudgementResult{
+				AttackDetected:   true,
+				Completeness:     true,
+				Reasonableness:   false,
+				ReasoningSummary: fmt.Sprintf("attack_detected: %s", detectResult.Reason),
+			}, nil
+		}
+		// 非攻击检测错误（判别器关闭/mock等）不阻塞，继续正常流程
+		if detectErr != nil {
+			log.Warn("judge: attack detection non-critical error, continuing", "error", detectErr.Error())
+		}
+	}
+
 	toolModel, err := chatModel.WithTools([]*schema.ToolInfo{judgementToolInfo()})
 	if err != nil {
 		log.Error("judge: bind tools failed", "error", err.Error())
@@ -161,6 +194,7 @@ func parseJudgementForInput(msg *schema.Message, input riskfactor.JudgeInput) (*
 }
 
 // parseJudgementFromMessage 从模型返回的消息中提取第一个工具调用并反序列化为 JudgementResult。
+// 所有从 LLM 获取的文本均经过安全处理（脱敏 + 追问安全审查），防止数据泄露和恶意输出。
 func parseJudgementFromMessage(msg *schema.Message, specs []riskfactor.QuestionSpec) (*riskfactor.JudgementResult, error) {
 	if msg == nil || len(msg.ToolCalls) == 0 {
 		return nil, ErrNoToolCall
@@ -170,6 +204,19 @@ func parseJudgementFromMessage(msg *schema.Message, specs []riskfactor.QuestionS
 	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
 		return nil, fmt.Errorf("llm: parse tool call arguments failed: %w", err)
 	}
+
+	// 输出安全防护：
+	// 1. extracted_info 脱敏 —— 防止 LLM 输出完整的身份证号、手机号、银行卡号等
+	args.ExtractedInfo = DesensitizeExtractedInfo(args.ExtractedInfo)
+	// 2. follow_up_question 安全审查 —— 拦截包含注入模式或敏感信息的追问文本
+	args.FollowUpQuestion = SanitizeFollowUpQuestion(args.FollowUpQuestion)
+	// 3. 逐问题 Note 脱敏
+	for i := range args.Items {
+		if args.Items[i].Note != "" {
+			args.Items[i].Note = DesensitizeText(args.Items[i].Note)
+		}
+	}
+
 	if len(specs) == 0 {
 		return &riskfactor.JudgementResult{Completeness: args.Completeness, Reasonableness: args.Reasonableness, FollowUpQuestion: args.FollowUpQuestion, ExtractedInfo: args.ExtractedInfo, ReasoningSummary: args.ReasoningSummary}, nil
 	}
@@ -177,5 +224,19 @@ func parseJudgementFromMessage(msg *schema.Message, specs []riskfactor.QuestionS
 	for _, item := range args.Items {
 		items = append(items, riskfactor.QuestionJudgement{QuestionKey: item.QuestionKey, Completeness: item.Completeness, Reasonableness: item.Reasonableness, Note: item.Note})
 	}
-	return riskfactor.AggregateJudgement(specs, items, args.ExtractedInfo, args.ReasoningSummary, args.FollowUpQuestion), nil
+	result := riskfactor.AggregateJudgement(specs, items, args.ExtractedInfo, args.ReasoningSummary, args.FollowUpQuestion)
+	// 二次脱敏 —— AggregateJudgement 可能重新组装 extracted_info
+	result.ExtractedInfo = DesensitizeExtractedInfo(result.ExtractedInfo)
+	return result, nil
+}
+
+// extractUserInputText 从 JudgeInput 中提取原始用户输入文本（拼接所有回答），供攻击判别器使用。
+func extractUserInputText(input riskfactor.JudgeInput) string {
+	var parts []string
+	for _, a := range input.Answers {
+		if a.Text != "" {
+			parts = append(parts, a.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }

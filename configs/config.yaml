@@ -24,6 +24,10 @@ llm:
     api_key: "" # 留空，通过环境变量 EINO_RISK_QA_LLM_DEEPSEEK_API_KEY 注入，不写入配置文件
     base_url: "" # 留空则使用默认值 https://api.deepseek.com/
     model: "deepseek-v4-flash" # deepseek-chat | deepseek-reasoner
+  attack_detector:
+    enabled: true                     # 是否启用 LLM 攻击判别器
+    confidence_threshold: 0.85        # 置信度阈值，低于此值不强拦截
+    timeout_seconds: 10               # 判别器单次请求超时（秒），超时按攻击处理（安全优先）
 
 storage:
   local_dir: "./data/uploads"

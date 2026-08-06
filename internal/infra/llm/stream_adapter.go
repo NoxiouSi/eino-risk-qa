@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/cloudwego/eino/schema"
@@ -23,6 +24,36 @@ func (a *JudgerAdapter) JudgeStream(ctx context.Context, input riskfactor.JudgeI
 	if err != nil {
 		log.Error("judge stream: select chat model failed", "error", err.Error())
 		return nil, err
+	}
+
+	// L1 攻击检测：流式场景同样在 BuildMessages 前执行
+	if a.attackDetector != nil {
+		userInput := extractUserInputText(input)
+		detectResult, detectErr := a.attackDetector.Detect(ctx, userInput)
+		if detectErr != nil && errors.Is(detectErr, ErrAttackDetected) {
+			log.Warn(
+				"judge stream: attack intent detected, rejecting as 'review not passed'",
+				"confidence", detectResult.Confidence,
+				"reason", detectResult.Reason,
+			)
+			events := make(chan riskfactor.JudgeStreamEvent, 1)
+			events <- riskfactor.JudgeStreamEvent{
+				SessionID:      input.SessionID,
+				RiskFactorType: input.RiskFactorType,
+				Type:           riskfactor.StreamEventResult,
+				Result: &riskfactor.JudgementResult{
+					AttackDetected:   true,
+					Completeness:     true,
+					Reasonableness:   false,
+					ReasoningSummary: fmt.Sprintf("attack_detected: %s", detectResult.Reason),
+				},
+			}
+			close(events)
+			return events, nil
+		}
+		if detectErr != nil {
+			log.Warn("judge stream: attack detection non-critical error, continuing", "error", detectErr.Error())
+		}
 	}
 	toolModel, err := chatModel.WithTools([]*schema.ToolInfo{judgementToolInfo()})
 	if err != nil {
@@ -82,8 +113,12 @@ func (a *JudgerAdapter) consumeStream(ctx context.Context, cancel context.Cancel
 		}
 		delta := scanner.Feed(chunk.ToolCalls[0].Function.Arguments)
 		if delta != "" {
-			deltaCount++
-			events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, RiskFactorType: input.RiskFactorType, Type: riskfactor.StreamEventMessageDelta, MessageDelta: delta}
+			// 流式增量安全审查：拦截包含注入模式或敏感信息的 delta
+			safeDelta := SanitizeStreamDelta(delta)
+			if safeDelta != "" {
+				deltaCount++
+				events <- riskfactor.JudgeStreamEvent{SessionID: sessionID, RiskFactorType: input.RiskFactorType, Type: riskfactor.StreamEventMessageDelta, MessageDelta: safeDelta}
+			}
 		}
 	}
 	log.Debug("judge stream: stream ended", "delta_count", deltaCount)

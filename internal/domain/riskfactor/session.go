@@ -206,6 +206,12 @@ func (s *RiskFactorSession) applyJudgement(question, answer string, judgement *J
 	s.Reasonableness = &reasonableness
 
 	switch {
+	case judgement.AttackDetected:
+		// 攻击检测：按"审核不通过"处理，但终止原因标记为 attack_detected
+		s.Status = StatusNotCleared
+		reason := TerminationReasonAttackDetected
+		s.TerminationReason = &reason
+		s.followUpQuestion = ""
 	case judgement.Completeness && judgement.Reasonableness:
 		s.Status = StatusCleared
 		s.TerminationReason = nil

@@ -46,7 +46,7 @@ erDiagram
 - 单个风险要素追问回答提交接口（按 session 定位，仅 Processing 状态可提交）
 - 批次/会话状态与历史问答查询接口
 - 完整性驱动追问循环（≤3轮），合理性仅参与终态结论合成、不驱动追问
-- 结论合成规则：完整+合理→Cleared；完整+不合理→NotCleared(unreasonable)；达上限仍不完整→NotCleared(max_rounds_incomplete)；不完整且未达上限→继续追问
+- 结论合成规则：完整+合理→Cleared；完整+不合理→NotCleared(unreasonable)；达上限仍不完整→NotCleared(max_rounds_incomplete)；不完整且未达上限→继续追问；**攻击检测命中→NotCleared(attack_detected)**
 - 提取信息跨轮次累积合并（同名字段以最新轮次为准）
 - 统一的 API 契约：响应包装格式、错误码体系、字段命名规范、鉴权方式
 - 全过程持久化，业务状态机作为领域核心知识内聚在领域层，LLM调用与Prompt模板经依赖倒置下沉到基础设施层
@@ -80,7 +80,7 @@ erDiagram
   - 领域事件（可选，供审计）：`SessionCleared`/`SessionNotCleared`/`FollowUpRequested`。
 - **application（应用层）**：编排批次、会话、用户问题树、附件归属和结构化答案校验；调用领域状态机并通过仓储端口落库。批次用`errgroup`并发处理风险要素；会话保存的数据库事务由仓储适配器封装。
 - **infra（基础设施层）**：
-  - `internal/infra/llm/`：ChatModel工厂（按provider分发eino-ext组件）、Prompt/ChatTemplate构建（系统提示词+风险要素类型+历史问答拼装）、结构化输出Tool Schema定义与解析重试、`JudgerAdapter`实现`domain.RiskJudger`（含基于增量Tool Call参数的追问文本真流式提取，详见"流式输出设计"）。
+  - `internal/infra/llm/`：ChatModel工厂（按provider分发eino-ext组件）、**攻击判别器（L1 LLM语义级攻击检测，超时/异常安全优先拒绝，置信度阈值可配置）**、Prompt/ChatTemplate构建（系统提示词+风险要素类型+历史问答拼装）、结构化输出Tool Schema定义与解析重试、`JudgerAdapter`实现`domain.RiskJudger`（含基于增量Tool Call参数的追问文本真流式提取及攻击检测拦截，详见"流式输出设计和"攻击防御"章节）。
   - `internal/infra/persistence/`：GORM实体定义（与domain聚合做双向映射，不直接复用domain结构体）、实现`domain.SessionRepository`（含乐观锁+事务）。
 - **api（接口层）**：`internal/api/`。Hertz路由、Handler、DTO，调用application层用例，不下沉业务逻辑；响应中的`message`字段直接取自`RiskFactorSession.UserMessage()`，api层不重复实现该推导规则；同时承载SSE流式响应的写出（详见"流式输出设计"章节）。
 - **config/main**：配置加载 + `cmd/server/main.go` 手动依赖组装（infra实现→注入application→注入api handler），无需额外DI框架。
@@ -97,6 +97,7 @@ erDiagram
   - completeness=true & reasonableness=false → NotCleared（cleared=false，reason=unreasonable）
   - completeness=false & round已达3 → NotCleared（cleared=false，reason=max_rounds_incomplete）
   - completeness=false & round<3 → 非终态，继续Processing，携带follow_up_question
+  - **attack_detected=true** → NotCleared（cleared=false，reason=attack_detected），不走 LLM 判断，直接合成结果；客户端无感知（HTTP 200 + 同正常驳回），后端日志与数据库 `termination_reason` 中特殊标记
 - **对外展示文案分层规则**：
   - `Status == Processing`（非终态） → `UserMessage()`返回本轮`follow_up_question`，提示具体需要补充的资料。
   - `Status ∈ {Cleared, NotCleared}` → 单会话响应保留`SessionCompletedMessage`语义供调用方识别，但前端只更新内部状态，不生成完成气泡。
@@ -104,7 +105,7 @@ erDiagram
 
 ## 状态机设计（domain层聚合根RiskFactorSession内实现，非分散在application/api）
 
-状态集合：Processing（含round 0~3）、Cleared（终态）、NotCleared（终态，含reason: unreasonable/max_rounds_incomplete）、LLMError（非终态、可重试、不消耗轮次）。
+状态集合：Processing（含round 0~3）、Cleared（终态）、NotCleared（终态，含reason: unreasonable/max_rounds_incomplete/attack_detected）、LLMError（非终态、可重试、不消耗轮次）。
 事件：SubmitInitialAnswer、SubmitFollowUpAnswer、LLM判断返回（携带completeness+reasonableness）、LLM调用/解析失败。
 
 ```mermaid
@@ -114,14 +115,19 @@ stateDiagram-v2
     LLMError --> Processing: 重试同一轮(不增加round)
     Processing --> Cleared: completeness=true & reasonableness=true
     Processing --> NotCleared_Unreasonable: completeness=true & reasonableness=false
+    Processing --> NotCleared_AttackDetected: attack_detected=true（后端合成，不进LLM）
     Processing --> NotCleared_MaxRounds: completeness=false & round==3
     Processing --> Processing: completeness=false & round<3 (round+=1, 记录follow_up_question, 等待SubmitFollowUpAnswer)
     NotCleared_Unreasonable --> [*]
+    NotCleared_AttackDetected --> [*]
     NotCleared_MaxRounds --> [*]
     Cleared --> [*]
 
     state NotCleared_Unreasonable {
       note: cleared=false, reason=unreasonable, UserMessage()=SessionCompletedMessage
+    }
+    state NotCleared_AttackDetected {
+      note: cleared=false, reason=attack_detected, UserMessage()=SessionCompletedMessage, 客户端无感知
     }
     state NotCleared_MaxRounds {
       note: cleared=false, reason=max_rounds_incomplete, UserMessage()=SessionCompletedMessage
@@ -134,6 +140,7 @@ stateDiagram-v2
 
 - 日志：不打印用户回答原文全文，仅记录session_id/batch_id/round/status/耗时。
 - LLM调用失败/解析失败：进入LLMError，允许同轮重试（不消耗round），最终仍失败需在响应中如实返回错误。
+- **攻击检测**：每次 `Judge()`/`JudgeStream()` 调用时，在 `BuildMessages` 之前执行，攻击判定为真时直接返回合成 `JudgementResult{AttackDetected=true}` 按审核不通过处理，不走 LLM。超时/异常安全优先（拒绝），低于置信度阈值放行（默认0.85，可配置）。
 - 批量接口单要素失败不应导致整批失败，返回每要素独立status/error。
 - “新增QA记录/结构化提交”与“更新session状态/轮次”由`GORMSessionRepository.Save`在同一GORM事务内完成，并通过乐观锁`version`检测并发更新。
 - extracted_info合并逻辑（跨轮次字段级合并）应实现为domain值对象上的方法（如`JudgementResult.MergeInto(existing map)`），保持规则内聚。
@@ -281,7 +288,7 @@ graph TB
 }
 ```
 
-- **字段命名规范**：全部使用 snake_case，与Go结构体 `json:"xxx_yyy"` tag 一一对应；时间字段统一 ISO8601 字符串（如 `2026-07-23T10:00:00Z`）；枚举字段使用小写下划线字符串（如 `risk_factor_type: "identity"` / `"fund_source"`；`status: "processing"|"cleared"|"not_cleared"|"llm_error"`；`termination_reason: "unreasonable"|"max_rounds_incomplete"`）。
+- **字段命名规范**：全部使用 snake_case，与Go结构体 `json:"xxx_yyy"` tag 一一对应；时间字段统一 ISO8601 字符串（如 `2026-07-23T10:00:00Z`）；枚举字段使用小写下划线字符串（如 `risk_factor_type: "identity"` / `"fund_source"`；`status: "processing"|"cleared"|"not_cleared"|"llm_error"`；`termination_reason: "unreasonable"|"max_rounds_incomplete"|"attack_detected"`）。
 - **鉴权方式**：当`auth.api_key`非空时，请求必须携带`X-API-Key: <key>`；为空时禁用鉴权，便于本地调试。鉴权失败返回`401 UNAUTHORIZED`。
 - **流式响应触发方式**：请求体可选`stream`（bool，默认`false`）。`true`时返回SSE；前置参数或鉴权失败仍返回标准JSON错误，不建立SSE连接。前端调试面板中的流式开关默认开启。
 - **会话与批次文案**：单会话`message`在`processing`时为追问，在终态时为“该项资料无需继续补充。”；前端不把单项终态消息渲染成气泡。只有整个批次全部结束时，前端才展示“审核结果将在3个工作日内推送给您”。部分完成、部分待补充时，前端显示完成项摘要和统一补充资料表单。
@@ -850,7 +857,7 @@ eino-risk-qa/
 │   ├── domain/riskfactor/             # 状态机、逐问题判断、端口和值对象
 │   ├── application/                   # 批次、会话、用户问题树用例及流事件
 │   ├── infra/
-│   │   ├── llm/                       # mock/openai/ark/deepseek、Prompt、Tool Schema、SSE扫描
+│   │   ├── llm/                       # mock/openai/ark/deepseek、攻击判别器、Prompt、Tool Schema、SSE扫描、输入净化
 │   │   ├── persistence/               # 会话、用户批次、问题树、附件GORM仓储
 │   │   └── idgen/                     # 业务ID生成
 │   ├── api/
@@ -913,6 +920,7 @@ type JudgementResult struct {
     ExtractedInfo    map[string]interface{}
     ReasoningSummary string
     FollowUpQuestion string
+    AttackDetected   bool              // 攻击判别器合成结果标记，true时按审核不通过处理
 }
 
 // MergeInto 将本轮提取信息与历史累积信息合并，同名字段以最新轮次为准
@@ -934,7 +942,7 @@ type RiskFactorSession struct {
     Status                SessionStatus // Processing | Cleared | NotCleared | LLMError
     CurrentRound          int           // 0~3
     MaxRounds             int           // 默认3
-    TerminationReason     *TerminationReason // unreasonable | max_rounds_incomplete
+    TerminationReason     *TerminationReason // unreasonable | max_rounds_incomplete | attack_detected
     ExtractedInfo         map[string]interface{}
     History               []QAPair
 }
@@ -952,6 +960,52 @@ func (s *RiskFactorSession) UserMessage() string
 // Save 时用于检测并发冲突（WHERE version=加载时的版本号），domain 层不修改该值、不作为业务规则的一部分
 func (s *RiskFactorSession) Version() int
 ```
+
+## 攻击防御（L0+L1 双层防护）
+
+### 设计原则
+
+所有 `Judge()`/`JudgeStream()` 调用在构建 Prompt 前经过两层攻击检测。判定为攻击时，直接返回合成的 `JudgementResult{AttackDetected=true, Completeness=true, Reasonableness=false}`，不走 LLM 判断。客户端无感知（HTTP 200，同正常"审核不通过"），后端日志与数据库 `termination_reason=attack_detected` 中特殊标记。
+
+安全策略：**超时/异常一律拒绝**（安全优先）；置信度低于阈值放行（默认 0.85，可配置）；Mock 模式下自动绕过。
+
+### L0：正则净化（`sanitizer.go`）
+
+在 `BuildMessages` 中调用 `Sanitize()`。现有 11 条英文正则 + 新增 8 条中文/中英混合正则，覆盖：
+
+| 类别 | 示例模式 |
+|------|----------|
+| 英文注入 | `ignore previous instructions`、`new system prompt` |
+| 越狱 | `DAN mode`、`jailbreak`、`developer mode` |
+| 中文注入 | `忽略之前的指令`、`忘记上面的规则` |
+| 角色篡改 | `你现在是…`、`你不再是审核员` |
+| 规则绕过 | `不要遵守...规则`、`输出只用中文回答` |
+| 中英混合 | `ignore 审查规则`、`bypass 检测` |
+
+### L1：LLM 判别器（`attack_detector.go`）
+
+L0 正则无法覆盖跨语言语义、变形编码、间接注入等复杂攻击。LLM 判别器承担以下职责：
+
+- **语义级判断**：识别中英混合、Base64 编码、角色扮演绕过等变形攻击
+- **分类 Prompt**：XML 标签 `<user_input>` 隔离用户输入，内置安全规则防止自身被注入
+- **输出格式**：`{"is_attack": bool, "confidence": 0.0-1.0, "reason": "中文说明"}`
+- **模型复用**：初期复用主 `chatModel`（DeepSeek/OpenAI），不单独配置小模型
+
+```
+用户输入 → L0 sanitizer(正则) → L1 AttackDetector(LLM)
+         ↓ 命中任一                 ↓ is_attack=true & confidence≥0.85
+       拒绝请求                   合成JudgementResult → session.Apply()
+                                  → termination_reason=attack_detected
+                                  → HTTP 200（正常"审核不通过"）
+```
+
+### 配置项
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `llm.attack_detector.enabled` | `true` | 关闭后全部放行 |
+| `llm.attack_detector.confidence_threshold` | `0.85` | LLM 返回置信度低于此值时放行 |
+| `llm.attack_detector.timeout_seconds` | `10` | 超时按攻击拒绝 |
 
 ## 本地运行方式
 
@@ -990,6 +1044,9 @@ npm run dev        # 默认监听 :5173，已通过 vite.config.ts 将 /api/* �
 | `storage.max_files_per_question` | `5` | 部署级单答案文件硬上限 |
 | `auth.api_key` | 空 | 空表示本地关闭鉴权 |
 | `log.level` | `info` | JSON日志等级 |
+| `llm.attack_detector.enabled` | `true` | 是否启用 LLM 攻击判别器（L1 防御） |
+| `llm.attack_detector.confidence_threshold` | `0.85` | 攻击判定置信度阈值，低于此值不拦截 |
+| `llm.attack_detector.timeout_seconds` | `10` | 判别器单次请求超时，超时按攻击处理（安全优先） |
 
 真实 LLM 配置：
 - 文本审核使用 DeepSeek：`llm.provider: deepseek`，密钥通过 `EINO_RISK_QA_LLM_DEEPSEEK_API_KEY` 注入。

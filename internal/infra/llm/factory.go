@@ -100,6 +100,11 @@ func NewToolCallingChatModel(ctx context.Context, cfg FactoryConfig) (model.Tool
 	}
 }
 
+// NewChatModel 创建基础 ToolCallingChatModel（无额外 Tool binding），供攻击判别器等轻量场景复用。
+func NewChatModel(ctx context.Context, cfg FactoryConfig) (model.ToolCallingChatModel, error) {
+	return NewToolCallingChatModel(ctx, cfg)
+}
+
 func newOpenAICompatibleChatModel(ctx context.Context, provider, apiKey, baseURL, modelName string) (model.ToolCallingChatModel, error) {
 	cm, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 		APIKey:  apiKey,

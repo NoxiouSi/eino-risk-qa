@@ -39,12 +39,13 @@ func (c MySQLConfig) DSN() string {
 
 // LLMConfig LLM Provider 可插拔配置，对应 docs/DESIGN.md 中的 factory.go 分发逻辑。
 type LLMConfig struct {
-	Provider              string         `mapstructure:"provider"`
-	VisionProvider        string         `mapstructure:"vision_provider"`
-	RequestTimeoutSeconds int            `mapstructure:"request_timeout_seconds"`
-	OpenAI                OpenAIConfig   `mapstructure:"openai"`
-	Ark                   ArkConfig      `mapstructure:"ark"`
-	DeepSeek              DeepSeekConfig `mapstructure:"deepseek"`
+	Provider              string               `mapstructure:"provider"`
+	VisionProvider        string               `mapstructure:"vision_provider"`
+	RequestTimeoutSeconds int                  `mapstructure:"request_timeout_seconds"`
+	OpenAI                OpenAIConfig         `mapstructure:"openai"`
+	Ark                   ArkConfig            `mapstructure:"ark"`
+	DeepSeek              DeepSeekConfig       `mapstructure:"deepseek"`
+	AttackDetector        AttackDetectorConfig `mapstructure:"attack_detector"`
 }
 
 type StorageConfig struct {
@@ -80,6 +81,13 @@ type DeepSeekConfig struct {
 // AuthConfig API Key 鉴权配置。
 type AuthConfig struct {
 	APIKey string `mapstructure:"api_key"`
+}
+
+// AttackDetectorConfig LLM 攻击判别器配置。
+type AttackDetectorConfig struct {
+	Enabled             bool    `mapstructure:"enabled"`
+	ConfidenceThreshold float64 `mapstructure:"confidence_threshold"`
+	TimeoutSeconds      int     `mapstructure:"timeout_seconds"`
 }
 
 // LogConfig 日志配置。
@@ -126,6 +134,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("llm.ark.base_url", "https://ark.cn-beijing.volces.com/api/v3")
 	v.SetDefault("llm.ark.model", "doubao-seed-2-1-turbo-260628")
 	v.SetDefault("llm.deepseek.model", "deepseek-chat")
+	v.SetDefault("llm.attack_detector.enabled", true)
+	v.SetDefault("llm.attack_detector.confidence_threshold", 0.85)
+	v.SetDefault("llm.attack_detector.timeout_seconds", 10)
 	v.SetDefault("storage.local_dir", "./data/uploads")
 	v.SetDefault("storage.max_file_bytes", 10*1024*1024)
 	v.SetDefault("storage.max_stored_image_bytes", 1024*1024)
@@ -143,6 +154,7 @@ func bindAllEnvKeys(v *viper.Viper) {
 		"llm.provider", "llm.vision_provider", "llm.request_timeout_seconds", "llm.openai.api_key", "llm.openai.base_url", "llm.openai.model",
 		"llm.ark.base_url", "llm.ark.model",
 		"llm.deepseek.api_key", "llm.deepseek.base_url", "llm.deepseek.model",
+		"llm.attack_detector.enabled", "llm.attack_detector.confidence_threshold", "llm.attack_detector.timeout_seconds",
 		"storage.local_dir", "storage.max_file_bytes", "storage.max_stored_image_bytes", "storage.max_files_per_question", "storage.allowed_mime_types",
 		"auth.api_key",
 		"log.level",

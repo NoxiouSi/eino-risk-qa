@@ -33,6 +33,9 @@ func NewMockChatModel() *MockChatModel {
 
 var _ model.ToolCallingChatModel = (*MockChatModel)(nil)
 
+// IsMock 标识自身为 mock 实现，供 AttackDetector 等下游组件在 mock 模式下绕过。
+func (m *MockChatModel) IsMock() bool { return true }
+
 // WithTools 返回绑定了给定工具列表的新实例（不修改原实例，符合 ToolCallingChatModel 约定）。
 func (m *MockChatModel) WithTools(tools []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
 	clone := *m

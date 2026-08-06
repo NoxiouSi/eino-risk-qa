@@ -31,6 +31,8 @@ const (
 	TerminationReasonUnreasonable TerminationReason = "unreasonable"
 	// TerminationReasonMaxRoundsIncomplete 达到最大轮次仍不完整。
 	TerminationReasonMaxRoundsIncomplete TerminationReason = "max_rounds_incomplete"
+	// TerminationReasonAttackDetected 输入触发攻击检测（安全拦截）。
+	TerminationReasonAttackDetected TerminationReason = "attack_detected"
 )
 
 // DefaultMaxRounds 默认最大追问轮次。

@@ -15,6 +15,10 @@ llm:
   provider: mock
   vision_provider: ""
   max_rounds: 3
+  attack_detector:
+    enabled: true
+    confidence_threshold: 0.85
+    timeout_seconds: 10
 
 storage:
   local_dir: "./data/test-uploads"

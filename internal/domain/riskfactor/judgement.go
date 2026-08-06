@@ -18,6 +18,9 @@ type JudgementResult struct {
 	ExtractedInfo    map[string]interface{}
 	ReasoningSummary string
 	FollowUpQuestion string
+	// AttackDetected 为 true 时表示本结果由攻击判别器合成，而非 LLM 判断。
+	// session.Apply() 据此设置 TerminationReasonAttackDetected，后端日志/数据记录可区分。
+	AttackDetected bool
 }
 
 // AggregateJudgement 从逐问题结果计算风险要素级快照。模型漏掉必填问题时按不完整处理。
